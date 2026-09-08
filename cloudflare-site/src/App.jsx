@@ -17,6 +17,7 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   Bell,
+  BarChart3,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
@@ -318,6 +319,28 @@ function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, onMigrateL
   )
 }
 
+function CompareModal({ show, activeSessionId, onSelect, onClose }) {
+  const sessions = [...show.sessions].sort((left, right) => `${left.date} ${left.time}`.localeCompare(`${right.date} ${right.time}`))
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+      <section className="source-modal compare-modal" role="dialog" aria-modal="true" aria-label="多日期对比">
+        <div className="modal-head"><div><span className="modal-icon"><BarChart3 size={19}/></span><div><h3>多日期对比</h3><p>{show.artist} · {show.venue} · 同一演出的不同日期</p></div></div><button className="icon-btn" onClick={onClose}><X size={18}/></button></div>
+        <div className="compare-summary"><span>对比市场最低价、在售量和票档数量</span><b>{sessions.length} 个日期</b></div>
+        <div className="price-table-wrap compare-table-wrap"><table className="price-table compare-table"><thead><tr><th>演出日期</th><th>开场时间</th><th>市场最低价</th><th>页面在售</th><th>票档数量</th><th>状态</th><th></th></tr></thead><tbody>{sessions.map((item) => {
+          const snapshot = sessionSnapshot(show, item)
+          const archived = isFinishedSessionView(item)
+          return <tr key={item.id} className={item.id === activeSessionId ? 'active-row' : ''}><td><b>{item.date ? item.date.replaceAll('-', '/') : '待识别'}</b><small>{item.weekday || '等待抓取'}</small></td><td>{item.time || '—'}</td><td><strong>{snapshot.pending ? '待抓取' : currency(snapshot.lowest, show)}</strong></td><td>{snapshot.pending ? '—' : `${snapshot.count} 条`}</td><td>{item.tiers?.length || '—'}</td><td><span className="table-status">{archived ? '已归档' : snapshot.pending ? '等待抓取' : '监测中'}</span></td><td><button className="compare-select" onClick={() => onSelect(item.id)}>{item.id === activeSessionId ? '当前查看' : '查看'}</button></td></tr>
+        })}</tbody></table></div>
+      </section>
+    </div>
+  )
+}
+
+function isFinishedSessionView(session) {
+  const endTime = sessionEndTime(session)
+  return !session.pending && endTime !== null && endTime <= Date.now()
+}
+
 export default function App() {
   const [showGroups, setShowGroups] = useState(() => {
     try { return JSON.parse(localStorage.getItem('ticket-radar-show-groups')) || initialShows } catch { return initialShows }
@@ -330,6 +353,7 @@ export default function App() {
   const [navOpen, setNavOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [sourceOpen, setSourceOpen] = useState(false)
+  const [compareOpen, setCompareOpen] = useState(false)
   const [cloudReady, setCloudReady] = useState(false)
   const [syncError, setSyncError] = useState('')
   const revisionRef = useRef(0)
@@ -548,6 +572,7 @@ export default function App() {
       <Sidebar showGroups={showGroups} activeShow={activeShow} setActiveShow={setActiveShow} query={query} setQuery={setQuery} open={navOpen} setOpen={setNavOpen} onOpenSource={() => setSourceOpen(true)} onDeleteGroup={deleteGroup}/>
       {navOpen && <button className="nav-scrim" onClick={() => setNavOpen(false)} />}
       {sourceOpen && <SourceModal onClose={() => setSourceOpen(false)} targets={targets} onAddTarget={addTarget} onDeleteTarget={deleteTarget} onMigrateLegacy={migrateLegacy}/>}
+      {compareOpen && <CompareModal show={activeShow} activeSessionId={sessionId} onClose={() => setCompareOpen(false)} onSelect={(id) => { setSessionId(id); setCompareOpen(false) }}/>} 
       <main className="main">
         <header className="topbar">
           <button className="icon-btn menu-btn" onClick={() => setNavOpen(true)}><Menu size={20}/></button>
@@ -576,7 +601,7 @@ export default function App() {
             <div className="session-tabs">
               {activeShow.sessions.map((item) => <button key={item.id} className={session.id === item.id ? 'active' : ''} onClick={() => setSessionId(item.id)}><b>{item.pending ? '待识别' : item.date.slice(5).replace('-', '/')}</b><span>{item.pending ? '等待首次抓取' : `${item.weekday} ${item.time}`}</span></button>)}
             </div>
-            <button className="filter-btn"><SlidersHorizontal size={16}/>筛选票档</button>
+            <button className="filter-btn" disabled={activeShow.sessions.length < 2} onClick={() => setCompareOpen(true)}><BarChart3 size={16}/>场次对比</button>
           </section>
 
           {session.pending ? <section className="pending-panel">
