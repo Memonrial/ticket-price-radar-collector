@@ -9,6 +9,7 @@
     "deploy": "npm run db:migrate && wrangler deploy"
   },
   "dependencies": {
+    "@cloudflare/puppeteer": "^1.1.0",
     "lucide-react": "latest",
     "react": "latest",
     "react-dom": "latest",

@@ -1,3 +1,5 @@
+import puppeteer from '@cloudflare/puppeteer'
+
 const LEGACY_STATE_URL = 'https://pjld666.memonrial.chatgpt.site/api/shared-state'
 
 const json = (value, status = 200) => new Response(JSON.stringify(value), {
@@ -210,39 +212,162 @@ function mergeSnapshotIntoState(state, snapshot) {
     })),
   }
   groups[groupIndex] = group
-  return { targets: state.targets, showGroups: groups }
+  const targets = state.targets.map((item) => (String(item.id) === snapshot.sessionId
+    ? { ...item, status: '监测中', interval: 120, lastCollected: time.full }
+    : item))
+  return { targets, showGroups: groups }
 }
 
-async function ingestSnapshot(request, db) {
-  let snapshot
-  try {
-    snapshot = normalizedSnapshot(await request.json())
-  } catch (error) {
-    return json({ error: error.message || '抓取快照无法读取' }, 400)
-  }
-
+async function persistSnapshot(db, snapshot) {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const state = await readState(db)
-    if (!state.initialized) return json({ error: '共享监测列表尚未初始化' }, 409)
-    let merged
-    try {
-      merged = mergeSnapshotIntoState(state, snapshot)
-    } catch (error) {
-      return json({ error: error.message }, 404)
-    }
+    if (!state.initialized) throw new Error('共享监测列表尚未初始化')
+    const merged = mergeSnapshotIntoState(state, snapshot)
     const targetsJson = JSON.stringify(merged.targets)
     const showGroupsJson = JSON.stringify(merged.showGroups)
-    if (targetsJson.length + showGroupsJson.length > 1_500_000) return json({ error: '历史数据量超过当前上限' }, 413)
+    if (targetsJson.length + showGroupsJson.length > 1_500_000) throw new Error('历史数据量超过当前上限')
     const result = await db.prepare(
       'UPDATE shared_radar_state SET targets_json = ?, show_groups_json = ?, revision = revision + 1, updated_at = ? WHERE id = 1 AND revision = ?',
     ).bind(targetsJson, showGroupsJson, new Date().toISOString(), state.revision).run()
-    if (Number(result.meta?.changes || 0) > 0) return json({ ok: true, sessionId: snapshot.sessionId, revision: state.revision + 1 })
+    if (Number(result.meta?.changes || 0) > 0) return { ok: true, sessionId: snapshot.sessionId, revision: state.revision + 1 }
   }
-  return json({ error: '数据刚刚被其他访问者修改，请稍后重试' }, 409)
+  throw new Error('数据刚刚被其他访问者修改，请稍后重试')
+}
+
+async function ingestSnapshot(request, db) {
+  try {
+    const snapshot = normalizedSnapshot(await request.json())
+    return json(await persistSnapshot(db, snapshot))
+  } catch (error) {
+    return json({ error: error.message || '抓取快照无法读取' }, 400)
+  }
+}
+
+function readTargetIds(value) {
+  const url = new URL(value)
+  if (!url.hostname.endsWith('moretickets.com')) throw new Error('只支持 MoreTickets 选座网址')
+  const sessionId = url.searchParams.get('sessionId')
+  const showId = url.searchParams.get('showId')
+  const tourId = url.searchParams.get('tourId')
+  if (!sessionId || !showId) throw new Error('链接中缺少 sessionId 或 showId')
+  return { sourceUrl: url.toString(), sessionId, showId, tourId }
+}
+
+function parseSessionText(sessionText) {
+  const chinese = sessionText.match(/(20\d{2})[年./-](\d{1,2})[月./-](\d{1,2})日?/) 
+  const english = sessionText.match(/\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+(\d{1,2}),?\s+(20\d{2})\b/i)
+  let date = ''
+  if (chinese) date = `${chinese[1]}-${String(chinese[2]).padStart(2, '0')}-${String(chinese[3]).padStart(2, '0')}`
+  if (english) {
+    const parsed = new Date(`${english[1]} ${english[2]} ${english[3]} 12:00:00 UTC`)
+    if (!Number.isNaN(parsed.getTime())) date = parsed.toISOString().slice(0, 10)
+  }
+  const weekday = date ? ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][new Date(`${date}T12:00:00Z`).getUTCDay()] : ''
+  const timeMatch = sessionText.match(/\b([01]?\d|2[0-3]):([0-5]\d)\b/)
+  let time = ''
+  if (timeMatch) {
+    let hour = Number(timeMatch[1])
+    const after = sessionText.slice(timeMatch.index + timeMatch[0].length, timeMatch.index + timeMatch[0].length + 4).trim().toUpperCase()
+    if (after.startsWith('PM') && hour < 12) hour += 12
+    if (after.startsWith('AM') && hour === 12) hour = 0
+    time = `${String(hour).padStart(2, '0')}:${timeMatch[2]}`
+  }
+  return { date, weekday, time }
+}
+
+async function scrapeMoreTickets(targetUrl, env) {
+  const ids = readTargetIds(targetUrl)
+  let browser
+  try {
+    browser = await puppeteer.launch(env.BROWSER)
+    const page = await browser.newPage()
+    await page.setViewport({ width: 1440, height: 1000 })
+    await page.goto(ids.sourceUrl, { waitUntil: 'domcontentloaded', timeout: 90_000 })
+    await page.waitForSelector('.ticket.hasColor.pc', { timeout: 90_000 })
+
+    const pageInfo = await page.evaluate(() => {
+      const text = (selector) => document.querySelector(selector)?.textContent?.trim() || ''
+      const venueSelectors = ['.venue-name', '.show-venue', '.address', "[class*='venue']"]
+      return {
+        showName: text('.tour-name'),
+        sessionText: text('.date-time'),
+        countText: text('.inventory-count'),
+        venue: venueSelectors.map((selector) => text(selector)).find(Boolean) || '',
+      }
+    })
+    const zones = await page.$$eval('.zone', (elements) => elements.map((element) => ({
+      color: element.style.getPropertyValue('--zone-color').trim(),
+      face_name: element.querySelector('.zone-name')?.textContent?.trim() || '',
+      minimum_text: element.querySelector('.price')?.textContent?.trim() || '',
+    })).map((zone) => {
+      const values = zone.face_name.match(/\d+(?:\.\d+)?/g) || []
+      const prices = zone.minimum_text.match(/\d+(?:\.\d+)?/g) || []
+      return { ...zone, face_value: values.length ? Number(values.at(-1)) : null, minimum_price: prices.length ? Number(prices.at(-1)) : null }
+    }))
+    const zoneByColor = new Map(zones.map((zone) => [zone.color, zone]))
+    const countMatch = pageInfo.countText.match(/[\d,]+/)
+    const listingCount = countMatch ? Number(countMatch[0].replaceAll(',', '')) : 0
+    const collected = new Map()
+
+    for (let turn = 0, unchanged = 0, previousSize = -1; turn < 80; turn += 1) {
+      const cards = await page.$$eval('.ticket.hasColor.pc', (elements) => elements.map((element) => ({
+        inventory_id: element.getAttribute('data-inventory-id'),
+        color: element.style.getPropertyValue('--ticket-color').trim(),
+        area_name: element.querySelector('.ticket-title')?.textContent?.trim() || '',
+        seat_info: element.querySelector('.seat')?.textContent?.trim() || '',
+        sale_price: Number((element.querySelector('.discount-price')?.textContent || '').replace(/[^0-9.]/g, '')),
+        delivery_text: element.querySelector('.issue-text')?.textContent?.trim() || '',
+      })))
+      for (const card of cards) if (card.inventory_id && Number.isFinite(card.sale_price) && card.sale_price > 0) collected.set(card.inventory_id, card)
+      if (collected.size === previousSize) unchanged += 1
+      else { previousSize = collected.size; unchanged = 0 }
+      if ((listingCount && collected.size >= listingCount) || unchanged >= 5) break
+      await page.$eval('.pc-ticket-list', (element) => { element.scrollTop += Math.max(element.clientHeight * 0.8, 500) })
+      await new Promise((resolve) => setTimeout(resolve, 350))
+    }
+
+    const collectedAt = new Date().toISOString()
+    const listings = [...collected.values()].map((card) => ({ ...card, ...(zoneByColor.get(card.color) || {}), collected_at: collectedAt })).sort((left, right) => left.sale_price - right.sale_price)
+    const session = parseSessionText(pageInfo.sessionText)
+    return {
+      session_id: ids.sessionId,
+      show_id: ids.showId,
+      tour_id: ids.tourId,
+      source_url: ids.sourceUrl,
+      show_name: pageInfo.showName,
+      session_text: pageInfo.sessionText,
+      session_date: session.date,
+      session_time: session.time,
+      session_weekday: session.weekday,
+      venue: pageInfo.venue,
+      currency: zones.some((zone) => zone.minimum_text.includes('HK$')) ? 'HK$' : '¥',
+      listing_count: listingCount,
+      loaded_listing_count: listings.length,
+      market_min_price: listings.length ? listings[0].sale_price : null,
+      collected_at: collectedAt,
+      tiers: zones,
+      listings,
+    }
+  } finally {
+    if (browser) await browser.close()
+  }
+}
+
+async function collectTarget(target, env) {
+  const snapshot = normalizedSnapshot(await scrapeMoreTickets(target.url, env))
+  await persistSnapshot(env.DB, snapshot)
+  return snapshot
+}
+
+async function collectEveryTarget(env) {
+  const state = await readState(env.DB)
+  for (const target of state.targets) {
+    try { await collectTarget(target, env) } catch (error) { console.error('scheduled ticket collection failed', target.id, error) }
+  }
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url)
     try {
       if (url.pathname === '/api/shared-state') {
@@ -265,11 +390,25 @@ export default {
         }
         return json({ error: '不支持的操作' }, 405)
       }
+      if (url.pathname === '/api/collect-now') {
+        if (request.method !== 'POST') return json({ error: '不支持的操作' }, 405)
+        if (!canWrite(request, env)) return json({ error: '共享编辑密码错误，请检查数据源设置中的密码' }, 401)
+        const body = await request.json().catch(() => ({}))
+        const sessionId = String(body.sessionId || '')
+        const state = await readState(env.DB)
+        const target = state.targets.find((item) => String(item.id) === sessionId)
+        if (!target) return json({ error: '找不到需要抓取的监测网址' }, 404)
+        const snapshot = await collectTarget(target, env)
+        return json({ ok: true, sessionId: snapshot.sessionId, state: await readState(env.DB) })
+      }
       if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('Method not allowed', { status: 405 })
       return env.ASSETS.fetch(request)
     } catch (error) {
       console.error('ticket-radar request failed', error)
       return json({ error: '共享数据库暂时不可用，请稍后重试' }, 500)
     }
+  },
+  async scheduled(_controller, env, ctx) {
+    ctx.waitUntil(collectEveryTarget(env))
   },
 }

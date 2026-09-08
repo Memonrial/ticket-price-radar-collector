@@ -147,9 +147,9 @@ function Sidebar({ showGroups, activeShow, setActiveShow, query, setQuery, open,
       </div>
       <div className="source-card">
         <div><span className="live-dot"></span><b>MoreTickets 已接入</b></div>
-        <p>已取得首个真实页面快照</p>
+        <p>新增链接后立即抓取首批数据</p>
         <div className="source-progress"><i></i></div>
-        <small>计划任务：每 15 分钟一次</small>
+        <small>计划任务：每 2 小时一次</small>
       </div>
       <div className="side-footer"><button onClick={onOpenSource}><Settings2 size={17}/> 数据源设置</button><span>v1.2</span></div>
     </aside>
@@ -219,7 +219,7 @@ function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, onMigrateL
   const [url, setUrl] = useState('')
   const [name, setName] = useState('')
   const [error, setError] = useState('')
-  const [saved, setSaved] = useState(false)
+  const [successMessage, setSuccessMessage] = useState('')
   const [saving, setSaving] = useState(false)
 
   const migrateLegacy = async () => {
@@ -227,8 +227,8 @@ function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, onMigrateL
     setError('')
     try {
       await onMigrateLegacy()
-      setSaved(true)
-      window.setTimeout(() => setSaved(false), 2200)
+      setSuccessMessage('旧网站数据已导入并同步')
+      window.setTimeout(() => setSuccessMessage(''), 2600)
     } catch (err) {
       setError(err?.message || '旧网站数据导入失败，请稍后重试')
     } finally {
@@ -245,12 +245,14 @@ function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, onMigrateL
         return
       }
       setSaving(true)
-      await onAddTarget({ ...ids, name: name || `待识别演出 ${targets.length + 1}`, url, interval: 15, status: '等待首次采集' })
+      const result = await onAddTarget({ ...ids, name: name || `待识别演出 ${targets.length + 1}`, url, interval: 120, status: '正在抓取首批数据' })
       setUrl('')
       setName('')
       setError('')
-      setSaved(true)
-      window.setTimeout(() => setSaved(false), 2200)
+      setSuccessMessage(result?.collectionError
+        ? `网址已加入监测；首批抓取暂未完成，系统会在下一次自动更新时重试：${result.collectionError}`
+        : '首批票价已抓取并同步到所有访问者')
+      window.setTimeout(() => setSuccessMessage(''), 5200)
     } catch (err) {
       setError(err?.message || '请粘贴包含 sessionId 和 showId 的完整 MoreTickets 选座链接')
     } finally {
@@ -261,25 +263,25 @@ function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, onMigrateL
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="source-modal" role="dialog" aria-modal="true" aria-label="数据源管理">
-        <div className="modal-head"><div><span className="modal-icon"><Database size={19}/></span><div><h3>数据源管理</h3><p>新增或更新需要持续抓取的演出页面</p></div></div><button className="icon-btn" onClick={onClose}><X size={18}/></button></div>
+        <div className="modal-head"><div><span className="modal-icon"><Database size={19}/></span><div><h3>数据源管理</h3><p>新增链接立即抓取首批价格，之后每 2 小时自动更新</p></div></div><button className="icon-btn" onClick={onClose}><X size={18}/></button></div>
         <form onSubmit={submit}>
           <label>平台</label>
           <div className="platform-field"><span className="live-dot"></span><b>MoreTickets</b><small>页面结构已识别</small></div>
           <label htmlFor="source-password">共享编辑密码</label>
-          <input id="source-password" type="password" value={writeToken} onChange={(event) => onWriteTokenChange(event.target.value)} autoComplete="current-password" placeholder="输入部署时设置的共享密码" required/>
+          <input id="source-password" type="password" value={writeToken} onChange={(event) => onWriteTokenChange(event.target.value)} autoComplete="current-password" placeholder="输入 Cloudflare 中 RADAR_WRITE_TOKEN 的同一密码" required/>
           <button className="submit-source" type="button" disabled={saving || !writeToken} onClick={migrateLegacy}><Database size={17}/>{saving ? '正在处理…' : '导入旧网站数据'}</button>
           <label htmlFor="source-name">演出备注名称</label>
           <input id="source-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：The Weeknd 香港站"/>
           <label htmlFor="source-url">选座页面完整网址</label>
           <div className="url-input"><Link2 size={17}/><textarea id="source-url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://www.moretickets.com/pick-seat?sessionId=..."/></div>
           {error && <p className="form-error">{error}</p>}
-          {saved && <p className="form-success"><CheckCircle2 size={14}/> 操作成功，数据已同步</p>}
-          <div className="schedule-row"><div><Clock3 size={17}/><span><b>抓取频率</b><small>每 15 分钟</small></span></div><div><Database size={17}/><span><b>保存方式</b><small>多人共享云端保存</small></span></div></div>
-          <button className="submit-source" type="submit" disabled={saving}><Plus size={17}/>{saving ? '正在保存…' : '加入监测队列'}</button>
+          {successMessage && <p className="form-success"><CheckCircle2 size={14}/> {successMessage}</p>}
+          <div className="schedule-row"><div><Clock3 size={17}/><span><b>抓取频率</b><small>立即抓取；之后每 2 小时</small></span></div><div><Database size={17}/><span><b>保存方式</b><small>多人共享云端保存</small></span></div></div>
+          <button className="submit-source" type="submit" disabled={saving}><Plus size={17}/>{saving ? '正在抓取首批数据…' : '加入并立即抓取'}</button>
         </form>
         <div className="target-list-head"><span>当前监测网址</span><b>{targets.length}</b></div>
-        <div className="target-list">{targets.map((target) => <article key={target.id}><div><span className="target-logo">M</span><div><b>{target.name}</b><small>{target.status} · {target.interval}分钟/次</small></div></div><div className="target-actions"><a href={target.url} target="_blank" rel="noreferrer" aria-label={`打开${target.name}`}><ExternalLink size={15}/></a><button aria-label={`删除${target.name}`} onClick={() => onDeleteTarget(target)}><Trash2 size={15}/></button></div></article>)}</div>
-        <p className="modal-note">新增链接会立即出现在左侧导航。同一 showId 会自动合并为一个演出页面，不同 sessionId 显示为不同日期；首次抓取后自动补全演员、地点和日期。</p>
+        <div className="target-list">{targets.map((target) => <article key={target.id}><div><span className="target-logo">M</span><div><b>{target.name}</b><small>{target.status} · {Number(target.interval) === 120 ? '每 2 小时自动更新' : `${target.interval}分钟/次`}</small></div></div><div className="target-actions"><a href={target.url} target="_blank" rel="noreferrer" aria-label={`打开${target.name}`}><ExternalLink size={15}/></a><button aria-label={`删除${target.name}`} onClick={() => onDeleteTarget(target)}><Trash2 size={15}/></button></div></article>)}</div>
+        <p className="modal-note">新增链接会立即出现在左侧导航，并自动开始首次抓取。同一 showId 会自动合并为一个演出页面，不同 sessionId 显示为不同日期；首次抓取后自动补全演员、地点和日期。</p>
       </section>
     </div>
   )
@@ -334,7 +336,7 @@ export default function App() {
       body: JSON.stringify({ targets: nextTargets, showGroups: nextGroups, baseRevision }),
     })
     const data = await response.json().catch(() => ({}))
-    if (response.status === 401) throw new Error('共享编辑密码错误，请在“数据源设置”中重新填写')
+    if (response.status === 401) throw new Error('共享编辑密码不正确：请在 Cloudflare 的 Variables and Secrets 中确认 RADAR_WRITE_TOKEN，并输入完全相同的密码')
     if (response.status === 409) {
       if (data.state) applyCloudState(data.state)
       if (baseRevision === 0 && data.state) return data.state
@@ -441,6 +443,19 @@ export default function App() {
     }
     await saveCloudState(nextTargets, nextGroups)
     setSessionId(target.id)
+    try {
+      const response = await fetch('/api/collect-now', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-radar-write-token': writeToken },
+        body: JSON.stringify({ sessionId: target.id }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.error || '首批抓取暂时不可用')
+      if (data.state) applyCloudState(data.state)
+      return { collected: true }
+    } catch (error) {
+      return { collected: false, collectionError: error?.message || '首批抓取暂时不可用' }
+    }
   }
 
   const deleteTarget = async (target) => {
