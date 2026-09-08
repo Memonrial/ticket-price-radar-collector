@@ -11,12 +11,6 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), {
   },
 })
 
-function canWrite(request, env) {
-  const expected = String(env.RADAR_WRITE_TOKEN || '')
-  const provided = String(request.headers.get('x-radar-write-token') || '')
-  return expected.length >= 8 && provided.length === expected.length && provided === expected
-}
-
 function parseStored(row) {
   if (!row) return { initialized: false, targets: [], showGroups: [], revision: 0, updatedAt: null }
   return {
@@ -373,26 +367,22 @@ export default {
       if (url.pathname === '/api/shared-state') {
         if (request.method === 'GET') return json(await readState(env.DB))
         if (request.method === 'PUT') {
-          if (!canWrite(request, env)) return json({ error: '共享编辑密码错误' }, 401)
           return await writeState(request, env.DB)
         }
         return json({ error: '不支持的操作' }, 405)
       }
       if (url.pathname === '/api/migrate-legacy') {
         if (request.method !== 'POST') return json({ error: '不支持的操作' }, 405)
-        if (!canWrite(request, env)) return json({ error: '共享编辑密码错误' }, 401)
         return json(await migrateLegacyState(env.DB))
       }
       if (url.pathname === '/api/collector/snapshot') {
         if (request.method === 'POST') {
-          if (!canWrite(request, env)) return json({ error: '抓取程序没有写入权限' }, 401)
           return await ingestSnapshot(request, env.DB)
         }
         return json({ error: '不支持的操作' }, 405)
       }
       if (url.pathname === '/api/collect-now') {
         if (request.method !== 'POST') return json({ error: '不支持的操作' }, 405)
-        if (!canWrite(request, env)) return json({ error: '共享编辑密码错误，请检查数据源设置中的密码' }, 401)
         const body = await request.json().catch(() => ({}))
         const sessionId = String(body.sessionId || '')
         const state = await readState(env.DB)

@@ -45,19 +45,6 @@ const initialShows = []
 
 const points = ['09/02', '09/03', '09/04', '09/05', '09/06', '09/07', '09/08']
 
-function readLocalValue(key, fallback = '') {
-  try { return window.localStorage.getItem(key) ?? fallback } catch { return fallback }
-}
-
-function writeLocalValue(key, value) {
-  try {
-    if (value) window.localStorage.setItem(key, value)
-    else window.localStorage.removeItem(key)
-  } catch {
-    // Some in-app browsers disable local storage. Cloud data remains available.
-  }
-}
-
 function seedOf(text) {
   return [...text].reduce((n, char) => n + char.charCodeAt(0), 0)
 }
@@ -215,7 +202,7 @@ function readTargetIds(url) {
   return { id, showId, tourId }
 }
 
-function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, onMigrateLegacy, writeToken, onWriteTokenChange }) {
+function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, onMigrateLegacy }) {
   const [url, setUrl] = useState('')
   const [name, setName] = useState('')
   const [error, setError] = useState('')
@@ -267,9 +254,7 @@ function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, onMigrateL
         <form onSubmit={submit}>
           <label>平台</label>
           <div className="platform-field"><span className="live-dot"></span><b>MoreTickets</b><small>页面结构已识别</small></div>
-          <label htmlFor="source-password">共享编辑密码</label>
-          <input id="source-password" type="password" value={writeToken} onChange={(event) => onWriteTokenChange(event.target.value)} autoComplete="current-password" placeholder="输入 Cloudflare 中 RADAR_WRITE_TOKEN 的同一密码" required/>
-          <button className="submit-source" type="button" disabled={saving || !writeToken} onClick={migrateLegacy}><Database size={17}/>{saving ? '正在处理…' : '导入旧网站数据'}</button>
+          <button className="submit-source" type="button" disabled={saving} onClick={migrateLegacy}><Database size={17}/>{saving ? '正在处理…' : '导入旧网站数据'}</button>
           <label htmlFor="source-name">演出备注名称</label>
           <input id="source-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：The Weeknd 香港站"/>
           <label htmlFor="source-url">选座页面完整网址</label>
@@ -299,7 +284,6 @@ export default function App() {
   const [navOpen, setNavOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [sourceOpen, setSourceOpen] = useState(false)
-  const [writeToken, setWriteToken] = useState(() => readLocalValue('ticket-radar-write-token'))
   const [cloudReady, setCloudReady] = useState(false)
   const [syncError, setSyncError] = useState('')
   const revisionRef = useRef(0)
@@ -323,20 +307,14 @@ export default function App() {
     setSyncError('')
   }, [])
 
-  const updateWriteToken = useCallback((value) => {
-    setWriteToken(value)
-    writeLocalValue('ticket-radar-write-token', value)
-  }, [])
-
   const saveCloudState = useCallback(async (nextTargets, nextGroups) => {
     const baseRevision = revisionRef.current
     const response = await fetch('/api/shared-state', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'x-radar-write-token': writeToken },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ targets: nextTargets, showGroups: nextGroups, baseRevision }),
     })
     const data = await response.json().catch(() => ({}))
-    if (response.status === 401) throw new Error('共享编辑密码不正确：请在 Cloudflare 的 Variables and Secrets 中确认 RADAR_WRITE_TOKEN，并输入完全相同的密码')
     if (response.status === 409) {
       if (data.state) applyCloudState(data.state)
       if (baseRevision === 0 && data.state) return data.state
@@ -345,7 +323,7 @@ export default function App() {
     if (!response.ok) throw new Error(data.error || '云端保存失败，请稍后重试')
     applyCloudState(data)
     return data
-  }, [applyCloudState, writeToken])
+  }, [applyCloudState])
 
   const loadCloudState = useCallback(async (initialize = false) => {
     try {
@@ -403,7 +381,6 @@ export default function App() {
   const migrateLegacy = async () => {
     const response = await fetch('/api/migrate-legacy', {
       method: 'POST',
-      headers: { 'x-radar-write-token': writeToken },
     })
     const data = await response.json().catch(() => ({}))
     if (!response.ok) throw new Error(data.error || '旧网站数据导入失败')
@@ -446,7 +423,7 @@ export default function App() {
     try {
       const response = await fetch('/api/collect-now', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-radar-write-token': writeToken },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ sessionId: target.id }),
       })
       const data = await response.json().catch(() => ({}))
@@ -499,7 +476,7 @@ export default function App() {
     <div className="app-shell">
       <Sidebar showGroups={showGroups} activeShow={activeShow} setActiveShow={setActiveShow} query={query} setQuery={setQuery} open={navOpen} setOpen={setNavOpen} onOpenSource={() => setSourceOpen(true)} onDeleteGroup={deleteGroup}/>
       {navOpen && <button className="nav-scrim" onClick={() => setNavOpen(false)} />}
-      {sourceOpen && <SourceModal onClose={() => setSourceOpen(false)} targets={targets} onAddTarget={addTarget} onDeleteTarget={deleteTarget} onMigrateLegacy={migrateLegacy} writeToken={writeToken} onWriteTokenChange={updateWriteToken}/>}
+      {sourceOpen && <SourceModal onClose={() => setSourceOpen(false)} targets={targets} onAddTarget={addTarget} onDeleteTarget={deleteTarget} onMigrateLegacy={migrateLegacy}/>}
       <main className="main">
         <header className="topbar">
           <button className="icon-btn menu-btn" onClick={() => setNavOpen(true)}><Menu size={20}/></button>

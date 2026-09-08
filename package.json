@@ -18,12 +18,5 @@
   },
   "devDependencies": {
     "wrangler": "latest"
-  },
-  "cloudflare": {
-    "bindings": {
-      "RADAR_WRITE_TOKEN": {
-        "description": "设置一个至少8位的共享编辑密码。只有知道密码的人才能新增、删除或上传抓取数据。"
-      }
-    }
   }
 }
