@@ -102,6 +102,32 @@ function cleanVenue(value) {
   return text
 }
 
+function tierIdentity(item) {
+  const sourceName = String(item?.tier_key || item?.face_name || '').replace(/\s+/g, ' ').trim()
+  const numericText = sourceName.replace(/^(?:HK\$|HKD|RMB|CNY|[¥￥$])\s*/i, '').replaceAll(',', '')
+  const isNumericTicketTier = /^\d+(?:\.\d+)?$/.test(numericText)
+  const fallback = finiteNumber(item?.face_value)
+  const key = sourceName || (fallback === null ? '未命名票档' : String(fallback))
+  return {
+    key: key.slice(0, 120),
+    name: key.slice(0, 120),
+    faceValue: isNumericTicketTier ? finiteNumber(numericText) : (sourceName ? null : fallback),
+  }
+}
+
+function sessionEndTime(session) {
+  const date = String(session?.date || '')
+  const time = /^\d{2}:\d{2}$/.test(String(session?.time || '')) ? session.time : '23:59'
+  if (!/^20\d{2}-\d{2}-\d{2}$/.test(date)) return null
+  const timestamp = new Date(`${date}T${time}:00+08:00`).getTime()
+  return Number.isFinite(timestamp) ? timestamp + 6 * 60 * 60 * 1000 : null
+}
+
+function isFinishedSession(session) {
+  const endTime = sessionEndTime(session)
+  return !session?.pending && endTime !== null && endTime <= Date.now()
+}
+
 function chinaTime(iso) {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return { full: iso, short: iso }
@@ -155,27 +181,33 @@ function mergeSnapshotIntoState(state, snapshot) {
 
   const current = group.sessions[sessionIndex]
   const time = chinaTime(snapshot.collectedAt)
-  const tierValues = [...new Set(snapshot.tiers.map((tier) => finiteNumber(tier.face_value)).filter((value) => value !== null))].sort((a, b) => a - b)
-  if (!tierValues.length) throw new Error('抓取结果中没有可用票档')
+  const zonesByTier = new Map()
+  for (const zone of snapshot.tiers) {
+    const identity = tierIdentity(zone)
+    if (identity.key !== '未命名票档' && !zonesByTier.has(identity.key)) zonesByTier.set(identity.key, { ...zone, ...identity })
+  }
+  const tierKeys = [...zonesByTier.keys()]
+  if (!tierKeys.length) throw new Error('抓取结果中没有可用票档')
   const livePrices = {}
   const tierHistory = structuredClone(current.tierHistory || {})
 
-  for (const face of tierValues) {
-    const zone = snapshot.tiers.find((tier) => finiteNumber(tier.face_value) === face) || {}
-    const rows = snapshot.listings.filter((item) => finiteNumber(item.face_value) === face)
+  for (const key of tierKeys) {
+    const zone = zonesByTier.get(key)
+    const rows = snapshot.listings.filter((item) => tierIdentity(item).key === key)
     const prices = rows.map((item) => finiteNumber(item.sale_price)).filter((value) => value !== null)
     const fallbackPrice = finiteNumber(zone.minimum_price)
     const minimum = prices.length ? Math.min(...prices) : fallbackPrice
     if (minimum === null) continue
-    livePrices[face] = {
+    livePrices[key] = {
       price: minimum,
       count: rows.length,
       max: prices.length ? Math.max(...prices) : minimum,
-      name: String(zone.face_name || `票面 ${face}`).slice(0, 120),
+      name: zone.name,
+      faceValue: zone.faceValue,
     }
-    const previous = Array.isArray(tierHistory[face]) ? tierHistory[face] : []
-    tierHistory[face] = [...previous.filter((item) => item.collectedAt !== snapshot.collectedAt), {
-      time: time.short, price: minimum, count: rows.length, face, collectedAt: snapshot.collectedAt,
+    const previous = Array.isArray(tierHistory[key]) ? tierHistory[key] : []
+    tierHistory[key] = [...previous.filter((item) => item.collectedAt !== snapshot.collectedAt), {
+      time: time.short, price: minimum, count: rows.length, face: key, collectedAt: snapshot.collectedAt,
     }].slice(-720)
   }
 
@@ -201,7 +233,7 @@ function mergeSnapshotIntoState(state, snapshot) {
     date: snapshot.sessionDate || current.date,
     weekday: snapshot.sessionWeekday || current.weekday,
     time: snapshot.sessionTime || current.time,
-    tiers: tierValues,
+    tiers: tierKeys,
     pending: false,
     sourceUrl: target.url || current.sourceUrl,
     listingCount: snapshot.listingCount,
@@ -212,7 +244,8 @@ function mergeSnapshotIntoState(state, snapshot) {
     history,
     listings: snapshot.listings.slice(0, 200).map((item, index) => ({
       id: String(item.inventory_id || `${snapshot.sessionId}-${index}`),
-      face: finiteNumber(item.face_value, 0),
+      face: tierIdentity(item).faceValue,
+      tier: tierIdentity(item).name,
       area: String(item.area_name || item.face_name || ''),
       seat: String(item.seat_info || 'Random'),
       price: finiteNumber(item.sale_price, 0),
@@ -224,6 +257,26 @@ function mergeSnapshotIntoState(state, snapshot) {
     ? { ...item, status: '监测中', interval: 120, lastCollected: time.full }
     : item))
   return { targets, showGroups: groups }
+}
+
+async function archiveExpiredShows(db) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const state = await readState(db)
+    if (!state.initialized) return state
+    let changed = false
+    const showGroups = state.showGroups.map((group) => {
+      const shouldArchive = !group.archivedAt && group.sessions?.length && group.sessions.every(isFinishedSession)
+      if (!shouldArchive) return group
+      changed = true
+      return { ...group, status: '已归档', archivedAt: new Date().toISOString() }
+    })
+    if (!changed) return state
+    const result = await db.prepare(
+      'UPDATE shared_radar_state SET show_groups_json = ?, revision = revision + 1, updated_at = ? WHERE id = 1 AND revision = ?',
+    ).bind(JSON.stringify(showGroups), new Date().toISOString(), state.revision).run()
+    if (Number(result.meta?.changes || 0) > 0) return readState(db)
+  }
+  return readState(db)
 }
 
 async function persistSnapshot(db, snapshot) {
@@ -333,9 +386,11 @@ async function scrapeMoreTickets(targetUrl, env) {
       face_name: element.querySelector('.zone-name')?.textContent?.trim() || '',
       minimum_text: element.querySelector('.price')?.textContent?.trim() || '',
     })).map((zone) => {
-      const values = zone.face_name.match(/\d+(?:\.\d+)?/g) || []
+      const name = zone.face_name.replace(/\s+/g, ' ').trim()
+      const numericText = name.replace(/^(?:HK\$|HKD|RMB|CNY|[¥￥$])\s*/i, '').replaceAll(',', '')
+      const faceValue = /^\d+(?:\.\d+)?$/.test(numericText) ? Number(numericText) : null
       const prices = zone.minimum_text.match(/\d+(?:\.\d+)?/g) || []
-      return { ...zone, face_value: values.length ? Number(values.at(-1)) : null, minimum_price: prices.length ? Number(prices.at(-1)) : null }
+      return { ...zone, tier_key: name, face_value: faceValue, minimum_price: prices.length ? Number(prices.at(-1)) : null }
     }))
     const zoneByColor = new Map(zones.map((zone) => [zone.color, zone]))
     const countMatch = pageInfo.countText.match(/[\d,]+/)
@@ -393,8 +448,11 @@ async function collectTarget(target, env) {
 }
 
 async function collectEveryTarget(env) {
-  const state = await readState(env.DB)
+  const state = await archiveExpiredShows(env.DB)
   for (const target of state.targets) {
+    const group = state.showGroups.find((item) => String(item.showId || item.groupKey || '') === String(target.showId || ''))
+    const session = group?.sessions?.find((item) => String(item.id) === String(target.id))
+    if (session && isFinishedSession(session)) continue
     try { await collectTarget(target, env) } catch (error) { console.error('scheduled ticket collection failed', target.id, error) }
   }
 }

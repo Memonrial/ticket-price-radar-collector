@@ -49,6 +49,46 @@ function seedOf(text) {
   return [...text].reduce((n, char) => n + char.charCodeAt(0), 0)
 }
 
+function tierInfo(session, tier) {
+  return session.livePrices?.[tier] || session.livePrices?.[String(tier)] || {}
+}
+
+function tierLabel(session, tier) {
+  return tierInfo(session, tier).name || String(tier)
+}
+
+function tierFaceValue(session, tier) {
+  const value = Number(tierInfo(session, tier).faceValue ?? tier)
+  return Number.isFinite(value) ? value : null
+}
+
+function filterTrend(data, range) {
+  const hours = { '24小时': 24, '7天': 24 * 7, '15天': 24 * 15 }[range]
+  if (!hours || !Array.isArray(data)) return data || []
+  const cutoff = Date.now() - hours * 60 * 60 * 1000
+  const filtered = data.filter((item) => {
+    const timestamp = new Date(item.collectedAt || '').getTime()
+    return Number.isFinite(timestamp) && timestamp >= cutoff
+  })
+  return filtered.length ? filtered : (data.length ? [data.at(-1)] : [])
+}
+
+function sessionEndTime(session) {
+  if (!session?.date) return null
+  const time = /^\d{2}:\d{2}$/.test(session.time || '') ? session.time : '23:59'
+  const timestamp = new Date(`${session.date}T${time}:00+08:00`).getTime()
+  return Number.isFinite(timestamp) ? timestamp + 6 * 60 * 60 * 1000 : null
+}
+
+function isArchivedShow(show) {
+  if (show?.archivedAt) return true
+  const sessions = show?.sessions || []
+  return Boolean(sessions.length) && sessions.every((item) => {
+    const endTime = sessionEndTime(item)
+    return !item.pending && endTime !== null && endTime <= Date.now()
+  })
+}
+
 function marketFor(show, session, tier) {
   const savedTrend = session.tierHistory?.[tier] || session.tierHistory?.[String(tier)]
   if (savedTrend?.length) return savedTrend
@@ -57,12 +97,14 @@ function marketFor(show, session, tier) {
     const latest = session.history?.at(-1)
     return [{ time: latest?.time || session.lastCollected || '最新', price: live.price, count: live.count, face: tier }]
   }
+  const faceValue = tierFaceValue(session, tier)
+  if (faceValue === null) return []
   const seed = seedOf(`${show.id}-${session.id}-${tier}`)
   const premium = 1.06 + (seed % 28) / 100
   const wave = [1.08, 1.03, 1.06, .99, 1.02, .96, .92]
   return points.map((time, index) => {
     const jitter = ((seed * (index + 3)) % 41) - 20
-    const price = Math.max(Math.round((tier * premium * wave[index] + jitter) / 10) * 10, tier * .68)
+    const price = Math.max(Math.round((faceValue * premium * wave[index] + jitter) / 10) * 10, faceValue * .68)
     const count = 70 + ((seed + index * 37) % 150) - index * 5
     return { time, price, count: Math.max(count, 18), face: tier }
   })
@@ -70,7 +112,8 @@ function marketFor(show, session, tier) {
 
 function sessionSnapshot(show, session) {
   if (session.pending) return { lowest: 0, prevLowest: 0, count: 0, change: 0, firstBatch: true, pending: true }
-  const series = session.tiers.map((tier) => marketFor(show, session, tier))
+  const series = session.tiers.map((tier) => marketFor(show, session, tier)).filter((items) => items.length)
+  if (!series.length) return { lowest: 0, prevLowest: 0, count: 0, change: 0, firstBatch: Boolean(session.livePrices) }
   const latest = series.map((items) => items.at(-1))
   const previous = series.map((items) => items.at(-2) || items.at(-1))
   const lowest = Math.min(...latest.map((item) => item.price))
@@ -79,7 +122,7 @@ function sessionSnapshot(show, session) {
   return { lowest, prevLowest, count, change: ((lowest - prevLowest) / prevLowest) * 100, firstBatch: Boolean(session.livePrices) }
 }
 
-const currency = (value, show) => `${show?.currency || '¥'}${Number(value).toLocaleString('zh-CN')}`
+const currency = (value, show) => Number.isFinite(Number(value)) ? `${show?.currency || '¥'}${Number(value).toLocaleString('zh-CN')}` : '—'
 
 function Countdown({ date, time }) {
   const [now, setNow] = useState(Date.now())
@@ -110,6 +153,19 @@ function TrendTooltip({ active, payload, label, show }) {
 
 function Sidebar({ showGroups, activeShow, setActiveShow, query, setQuery, open, setOpen, onOpenSource, onDeleteGroup }) {
   const filtered = showGroups.filter((show) => `${show.artist}${show.tour}${show.city}${show.venue}`.toLowerCase().includes(query.toLowerCase()))
+  const monitoring = filtered.filter((show) => !isArchivedShow(show))
+  const archived = filtered.filter((show) => isArchivedShow(show))
+  const showRow = (show) => {
+    const firstSnapshot = sessionSnapshot(show, show.sessions[0])
+    return <div key={show.id} className={`show-item-row ${activeShow.id === show.id ? 'active' : ''}`}>
+      <button className="show-item" onClick={() => { setActiveShow(show); setOpen(false) }}>
+        <div className="artist-avatar" style={{ '--accent': show.accent }}>{show.initials}</div>
+        <div className="show-copy"><b>{show.artist}</b><span>{isArchivedShow(show) ? '已归档' : `${show.city} · ${show.sessions.length}个日期`}</span></div>
+        <div className="show-price"><b>{firstSnapshot.pending ? '待抓取' : currency(firstSnapshot.lowest, show)}</b><span className={isArchivedShow(show) ? 'pending-text' : firstSnapshot.pending ? 'pending-text' : firstSnapshot.firstBatch ? 'live-text' : firstSnapshot.change > 0 ? 'up' : 'down'}>{isArchivedShow(show) ? '历史数据' : firstSnapshot.pending ? '等待识别' : firstSnapshot.firstBatch ? '最新快照' : `${firstSnapshot.change > 0 ? '+' : ''}${firstSnapshot.change.toFixed(1)}%`}</span></div>
+      </button>
+      <button className="delete-show" aria-label={`删除${show.artist}${show.city}`} title="删除这一组监测" onClick={() => onDeleteGroup(show)}><Trash2 size={14}/></button>
+    </div>
+  }
   return (
     <aside className={`sidebar ${open ? 'is-open' : ''}`}>
       <div className="brand">
@@ -118,20 +174,9 @@ function Sidebar({ showGroups, activeShow, setActiveShow, query, setQuery, open,
         <button className="icon-btn close-nav" onClick={() => setOpen(false)}><X size={20}/></button>
       </div>
       <div className="search"><Search size={17}/><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜索艺人、城市或巡演"/></div>
-      <div className="side-heading"><span>监测中的演出</span><b>{filtered.length}</b></div>
-      <div className="show-list">
-        {filtered.map((show) => {
-          const firstSnapshot = sessionSnapshot(show, show.sessions[0])
-          return <div key={show.id} className={`show-item-row ${activeShow.id === show.id ? 'active' : ''}`}>
-            <button className="show-item" onClick={() => { setActiveShow(show); setOpen(false) }}>
-              <div className="artist-avatar" style={{ '--accent': show.accent }}>{show.initials}</div>
-              <div className="show-copy"><b>{show.artist}</b><span>{show.city} · {show.sessions.length}个日期</span></div>
-              <div className="show-price"><b>{firstSnapshot.pending ? '待抓取' : currency(firstSnapshot.lowest, show)}</b><span className={firstSnapshot.pending ? 'pending-text' : firstSnapshot.firstBatch ? 'live-text' : firstSnapshot.change > 0 ? 'up' : 'down'}>{firstSnapshot.pending ? '等待识别' : firstSnapshot.firstBatch ? '最新快照' : `${firstSnapshot.change > 0 ? '+' : ''}${firstSnapshot.change.toFixed(1)}%`}</span></div>
-            </button>
-            <button className="delete-show" aria-label={`删除${show.artist}${show.city}`} title="删除这一组监测" onClick={() => onDeleteGroup(show)}><Trash2 size={14}/></button>
-          </div>
-        })}
-      </div>
+      <div className="side-heading"><span>监测中的演出</span><b>{monitoring.length}</b></div>
+      <div className="show-list">{monitoring.map(showRow)}</div>
+      {archived.length > 0 && <><div className="side-heading archive-heading"><span>历史归档</span><b>{archived.length}</b></div><div className="show-list archived-list">{archived.map(showRow)}</div></>}
       <div className="source-card">
         <div><span className="live-dot"></span><b>MoreTickets 已接入</b></div>
         <p>新增链接后立即抓取首批数据</p>
@@ -152,8 +197,9 @@ function MiniStat({ icon: Icon, label, value, meta, tone = 'neutral' }) {
   )
 }
 
-function TierCard({ show, session, tier, index }) {
-  const data = marketFor(show, session, tier)
+function TierCard({ show, session, tier, index, range }) {
+  const data = filterTrend(marketFor(show, session, tier), range)
+  if (!data.length) return null
   const current = data.at(-1).price
   const previous = (data.at(-2) || data.at(-1)).price
   const change = ((current - previous) / previous) * 100
@@ -161,12 +207,12 @@ function TierCard({ show, session, tier, index }) {
   return (
     <article className="tier-card">
       <div className="tier-head">
-        <div><span>{session.livePrices?.[tier]?.name || '票面'}</span><strong>{currency(tier, show)}</strong></div>
+        <div><span>票档</span><strong>{tierLabel(session, tier)}</strong></div>
         <div className="tier-current"><span>当前最低</span><b>{currency(current, show)}</b></div>
       </div>
       <div className="tier-meta">
         {session.livePrices ? <span className="live-text"><CheckCircle2 size={13}/> 真实抓取数据</span> : <span className={change > 0 ? 'up' : 'down'}>{change > 0 ? <ArrowUpRight size={14}/> : <ArrowDownRight size={14}/>} 较上次 {Math.abs(change).toFixed(1)}%</span>}
-        <span>{session.livePrices ? '当前最低' : '7日最低'} {currency(low, show)}</span>
+        <span>{session.livePrices ? '当前最低' : '区间最低'} {currency(low, show)}</span>
         <span>{session.livePrices ? '已加载' : '在售'} {data.at(-1).count} 条</span>
       </div>
       <div className="mini-chart">
@@ -362,21 +408,28 @@ export default function App() {
     if (!activeShow.sessions.some((item) => item.id === sessionId)) setSessionId(activeShow.sessions[0].id)
   }, [activeShow, sessionId])
   const session = activeShow.sessions.find((item) => item.id === sessionId) || activeShow.sessions[0]
+  const archived = isArchivedShow(activeShow)
+  const lowestFaceValue = useMemo(() => {
+    const values = session.tiers.map((tier) => tierFaceValue(session, tier)).filter((value) => value !== null)
+    return values.length ? Math.min(...values) : null
+  }, [session])
   const snapshot = useMemo(() => sessionSnapshot(activeShow, session), [activeShow, session])
   const overview = useMemo(() => {
     if (session.pending) return []
-    if (session.history) return session.history
-    return points.map((time, idx) => {
+    const history = session.history?.length ? session.history : points.map((time, idx) => {
       const rows = session.tiers.map((tier) => marketFor(activeShow, session, tier)[idx])
+        .filter(Boolean)
+      if (!rows.length) return null
       return { time, price: Math.min(...rows.map((row) => row.price)), count: rows.reduce((sum, row) => sum + row.count, 0) }
-    })
-  }, [activeShow, session])
+    }).filter(Boolean)
+    return filterTrend(history, range)
+  }, [activeShow, range, session])
 
   const refresh = async () => {
     setRefreshing(true)
     try {
       const target = targets.find((item) => item.id === session.id)
-      if (activeShow.live && target && !session.pending) {
+      if (activeShow.live && target && !session.pending && !archived) {
         const response = await fetch('/api/collect-now', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -503,19 +556,19 @@ export default function App() {
             <span className="updated" title={syncError || '所有访问者共享同一份数据'}><span className={syncError ? 'pending-dot' : cloudReady ? 'live-dot' : 'demo-dot'}></span> {syncError ? '云端同步异常' : cloudReady ? '共享数据已同步' : '正在连接云端'}</span>
             <button className="icon-btn"><Bell size={18}/><i className="notice-dot"></i></button>
             <button className="add-source-btn" onClick={() => setSourceOpen(true)}><Plus size={16}/>新增监测</button>
-            <button className="refresh-btn" onClick={refresh}><RefreshCw className={refreshing ? 'spin' : ''} size={16}/>{refreshing ? '刷新中' : activeShow.live ? '刷新快照' : '模拟刷新'}</button>
+            <button className="refresh-btn" onClick={refresh} disabled={archived}><RefreshCw className={refreshing ? 'spin' : ''} size={16}/>{refreshing ? '刷新中' : archived ? '已归档' : activeShow.live ? '刷新快照' : '模拟刷新'}</button>
           </div>
         </header>
 
         <div className="content">
           <section className="hero-panel">
             <div className="event-intro">
-              <div className="event-badges"><span className="status-badge"><Radio size={13}/>{activeShow.status}</span><span>{activeShow.city}</span></div>
+              <div className="event-badges"><span className="status-badge"><Radio size={13}/>{archived ? '已归档' : activeShow.status}</span><span>{activeShow.city}</span></div>
               <h1>{activeShow.artist}</h1>
               <h2>{activeShow.tour}</h2>
               <p><CalendarDays size={16}/>{session.pending ? '新链接已加入监测队列' : `${session.date} ${session.weekday} ${session.time}`}<i></i>{activeShow.venue}</p>
             </div>
-            <div className="countdown-wrap"><span><Clock3 size={15}/>距离本场开演</span><Countdown date={session.date} time={session.time}/></div>
+            <div className="countdown-wrap"><span><Clock3 size={15}/>{archived ? '历史演出' : '距离本场开演'}</span>{archived ? <b>已归档</b> : <Countdown date={session.date} time={session.time}/>}</div>
           </section>
 
           <section className="session-row">
@@ -535,15 +588,15 @@ export default function App() {
           <section className="stats-grid">
             <MiniStat icon={Ticket} label="市场最低价" value={currency(snapshot.lowest, activeShow)} meta={snapshot.firstBatch ? '✓ MoreTickets 首个真实快照' : `${snapshot.change > 0 ? '↑' : '↓'} 较上次采集 ${Math.abs(snapshot.change).toFixed(1)}%`} tone={snapshot.change > 0 ? 'warning' : 'positive'}/>
             <MiniStat icon={Activity} label="页面在售 Listings" value={`${snapshot.count} 条`} meta={`覆盖 ${session.tiers.length} 个票面`} tone="violet"/>
-            <MiniStat icon={TrendingDown} label="较最低票面溢价" value={`${Math.round((snapshot.lowest / Math.min(...session.tiers) - 1) * 100)}%`} meta={`最低票面 ${currency(Math.min(...session.tiers), activeShow)}`} tone="blue"/>
-            <MiniStat icon={Clock3} label="本场剩余时间" value={<Countdown date={session.date} time={session.time}/>} meta="演出结束后自动归档" tone="neutral"/>
+            <MiniStat icon={TrendingDown} label={lowestFaceValue === null ? '票档类型' : '较最低票面溢价'} value={lowestFaceValue === null ? `${session.tiers.length} 档` : `${Math.round((snapshot.lowest / lowestFaceValue - 1) * 100)}%`} meta={lowestFaceValue === null ? '按原页面票档展示' : `最低票面 ${currency(lowestFaceValue, activeShow)}`} tone="blue"/>
+            <MiniStat icon={Clock3} label="最后采集" value={session.lastCollected || '等待首批数据'} meta={archived ? '已归档，趋势数据已保留' : '每 2 小时自动更新'} tone="neutral"/>
           </section>
 
           <section className="chart-panel">
             <div className="panel-head">
               <div><h3>本场市场趋势</h3><p>最低成交价与在售票量变化</p></div>
               <div className="chart-controls">
-                <div className="segmented">{['24小时', '7天', '30天', '全部'].map((item) => <button className={range === item ? 'active' : ''} onClick={() => setRange(item)} key={item}>{item}</button>)}</div>
+                <div className="segmented">{['24小时', '7天', '15天'].map((item) => <button className={range === item ? 'active' : ''} onClick={() => setRange(item)} key={item}>{item}</button>)}</div>
                 <button className="select-btn">最低价 <ChevronDown size={15}/></button>
               </div>
             </div>
@@ -569,12 +622,12 @@ export default function App() {
               <div className="view-switch"><button className={tab === '总览' ? 'active' : ''} onClick={() => setTab('总览')}>卡片总览</button><button className={tab === '明细' ? 'active' : ''} onClick={() => setTab('明细')}>价格明细</button></div>
             </div>
             {tab === '总览' ? (
-              <div className="tier-grid">{session.tiers.map((tier, index) => <TierCard key={tier} show={activeShow} session={session} tier={tier} index={index}/>)}</div>
+              <div className="tier-grid">{session.tiers.map((tier, index) => <TierCard key={tier} show={activeShow} session={session} tier={tier} index={index} range={range}/>)}</div>
             ) : (
               <div className="price-table-wrap">
                 <table className="price-table">
-                  <thead><tr><th>票面</th><th>当前最低</th><th>在售票量</th><th>7日最低</th><th>7日最高</th><th>相对票面</th><th>状态</th></tr></thead>
-                  <tbody>{session.tiers.map((tier) => { const data = marketFor(activeShow, session, tier); const current = data.at(-1); const liveTier = session.livePrices?.[tier]; return <tr key={tier}><td><b>{currency(tier, activeShow)}</b><small className="tier-name-cell">{liveTier?.name}</small></td><td><strong>{currency(current.price, activeShow)}</strong></td><td>{current.count} {session.livePrices ? '条已加载' : '张'}</td><td>{currency(Math.min(...data.map(d => d.price)), activeShow)}</td><td>{currency(liveTier?.max || Math.max(...data.map(d => d.price)), activeShow)}</td><td className={current.price < tier ? 'down' : 'up'}>{current.price < tier ? '-' : '+'}{Math.abs((current.price / tier - 1) * 100).toFixed(1)}%</td><td><span className="table-status">{session.livePrices ? '真实快照' : '监测中'}</span></td></tr>})}</tbody>
+                  <thead><tr><th>票档</th><th>当前最低</th><th>在售票量</th><th>区间最低</th><th>区间最高</th><th>相对票面</th><th>状态</th></tr></thead>
+                  <tbody>{session.tiers.map((tier) => { const data = filterTrend(marketFor(activeShow, session, tier), range); if (!data.length) return null; const current = data.at(-1); const liveTier = tierInfo(session, tier); const faceValue = tierFaceValue(session, tier); const relative = faceValue === null ? null : ((current.price / faceValue - 1) * 100); return <tr key={tier}><td><b>{tierLabel(session, tier)}</b>{faceValue !== null && String(faceValue) !== tierLabel(session, tier) && <small className="tier-name-cell">票面 {currency(faceValue, activeShow)}</small>}</td><td><strong>{currency(current.price, activeShow)}</strong></td><td>{current.count} {session.livePrices ? '条已加载' : '张'}</td><td>{currency(Math.min(...data.map(d => d.price)), activeShow)}</td><td>{currency(liveTier?.max || Math.max(...data.map(d => d.price)), activeShow)}</td><td className={relative !== null && relative < 0 ? 'down' : 'up'}>{relative === null ? '—' : `${relative < 0 ? '-' : '+'}${Math.abs(relative).toFixed(1)}%`}</td><td><span className="table-status">{archived ? '已归档' : session.livePrices ? '真实快照' : '监测中'}</span></td></tr>})}</tbody>
                 </table>
               </div>
             )}
@@ -582,7 +635,7 @@ export default function App() {
 
           {session.listings && <section className="listings-section">
             <div className="panel-head listing-title"><div><h3>真实票源明细</h3><p>从 MoreTickets 页面读取的当前最终售价 · 首批展示 {session.listings.length} 条</p></div><a href={activeShow.pageUrl} target="_blank" rel="noreferrer">查看原页面 <ExternalLink size={14}/></a></div>
-            <div className="price-table-wrap"><table className="price-table listing-table"><thead><tr><th>票面</th><th>区域 / 票档</th><th>座位说明</th><th>当前最终售价</th><th>交付时间</th><th>Inventory ID</th></tr></thead><tbody>{session.listings.map((item) => <tr key={item.id}><td><b>{currency(item.face, activeShow)}</b></td><td>{item.area}</td><td>{item.seat}</td><td><strong>{currency(item.price, activeShow)}</strong><small>/张</small></td><td>{item.delivery}</td><td><code>{item.id}</code></td></tr>)}</tbody></table></div>
+            <div className="price-table-wrap"><table className="price-table listing-table"><thead><tr><th>票档</th><th>区域 / 票档</th><th>座位说明</th><th>当前最终售价</th><th>交付时间</th><th>Inventory ID</th></tr></thead><tbody>{session.listings.map((item) => <tr key={item.id}><td><b>{item.tier || currency(item.face, activeShow)}</b></td><td>{item.area}</td><td>{item.seat}</td><td><strong>{currency(item.price, activeShow)}</strong><small>/张</small></td><td>{item.delivery}</td><td><code>{item.id}</code></td></tr>)}</tbody></table></div>
           </section>}
           </>}
 
