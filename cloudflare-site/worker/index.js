@@ -1,4 +1,3 @@
-const STATIC_ASSETS = /*__STATIC_ASSETS__*/
 const LEGACY_STATE_URL = 'https://pjld666.memonrial.chatgpt.site/api/shared-state'
 
 const json = (value, status = 200) => new Response(JSON.stringify(value), {
@@ -242,30 +241,6 @@ async function ingestSnapshot(request, db) {
   return json({ error: '数据刚刚被其他访问者修改，请稍后重试' }, 409)
 }
 
-function decodeBase64(value) {
-  const raw = atob(value)
-  const bytes = new Uint8Array(raw.length)
-  for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i)
-  return bytes
-}
-
-function serveAsset(request, pathname) {
-  let key = pathname === '/' ? '/index.html' : pathname
-  let asset = STATIC_ASSETS[key]
-  if (!asset && request.headers.get('accept')?.includes('text/html')) {
-    key = '/index.html'
-    asset = STATIC_ASSETS[key]
-  }
-  if (!asset) return new Response('Not found', { status: 404 })
-  const body = asset.encoding === 'base64' ? decodeBase64(asset.body) : asset.body
-  const headers = {
-    'content-type': asset.contentType,
-    'x-content-type-options': 'nosniff',
-    'cache-control': key === '/index.html' ? 'no-cache' : 'public, max-age=31536000, immutable',
-  }
-  return new Response(body, { headers })
-}
-
 export default {
   async fetch(request, env) {
     const url = new URL(request.url)
@@ -291,7 +266,7 @@ export default {
         return json({ error: '不支持的操作' }, 405)
       }
       if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('Method not allowed', { status: 405 })
-      return serveAsset(request, decodeURIComponent(url.pathname))
+      return env.ASSETS.fetch(request)
     } catch (error) {
       console.error('ticket-radar request failed', error)
       return json({ error: '共享数据库暂时不可用，请稍后重试' }, 500)

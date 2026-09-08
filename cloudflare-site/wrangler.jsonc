@@ -1,14 +1,19 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "ticket-price-radar",
-  "main": "dist/worker/index.js",
+  "main": "worker/index.js",
   "compatibility_date": "2026-09-08",
   "workers_dev": true,
+  "assets": {
+    "directory": "./dist/client",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "ticket-price-radar-db",
-      "database_id": "ada5436c-3f5b-43c3-bfe9-cef7386d5558",
+      "database_id": "00000000-0000-0000-0000-000000000000",
       "migrations_dir": "migrations"
     }
   ]
