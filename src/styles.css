@@ -249,7 +249,8 @@ button { cursor: pointer; }
   .event-intro h1 { font-size: 25px; }
   .countdown { font-size: 18px; }
   .session-row { padding: 14px; }
-  .filter-btn { display: none; }
+  .filter-btn:not(.compare-trigger) { display: none; }
+  .compare-trigger { display: flex; }
   .session-tabs { width: 100%; }
   .stats-grid { grid-template-columns: 1fr; }
   .chart-panel, .tiers-section, .listings-section { padding: 17px 14px; }

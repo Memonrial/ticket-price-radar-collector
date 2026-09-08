@@ -601,7 +601,7 @@ export default function App() {
             <div className="session-tabs">
               {activeShow.sessions.map((item) => <button key={item.id} className={session.id === item.id ? 'active' : ''} onClick={() => setSessionId(item.id)}><b>{item.pending ? '待识别' : item.date.slice(5).replace('-', '/')}</b><span>{item.pending ? '等待首次抓取' : `${item.weekday} ${item.time}`}</span></button>)}
             </div>
-            <button className="filter-btn" disabled={activeShow.sessions.length < 2} onClick={() => setCompareOpen(true)}><BarChart3 size={16}/>场次对比</button>
+            <button className="filter-btn compare-trigger" disabled={activeShow.sessions.length < 2} onClick={() => setCompareOpen(true)}><BarChart3 size={16}/>场次对比</button>
           </section>
 
           {session.pending ? <section className="pending-panel">
