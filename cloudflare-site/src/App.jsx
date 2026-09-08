@@ -202,12 +202,26 @@ function readTargetIds(url) {
   return { id, showId, tourId }
 }
 
-function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, writeToken, onWriteTokenChange }) {
+function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, onMigrateLegacy, writeToken, onWriteTokenChange }) {
   const [url, setUrl] = useState('')
   const [name, setName] = useState('')
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
+
+  const migrateLegacy = async () => {
+    setSaving(true)
+    setError('')
+    try {
+      await onMigrateLegacy()
+      setSaved(true)
+      window.setTimeout(() => setSaved(false), 2200)
+    } catch (err) {
+      setError(err?.message || '旧网站数据导入失败，请稍后重试')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const submit = async (event) => {
     event.preventDefault()
@@ -240,12 +254,13 @@ function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, writeToken
           <div className="platform-field"><span className="live-dot"></span><b>MoreTickets</b><small>页面结构已识别</small></div>
           <label htmlFor="source-password">共享编辑密码</label>
           <input id="source-password" type="password" value={writeToken} onChange={(event) => onWriteTokenChange(event.target.value)} autoComplete="current-password" placeholder="输入部署时设置的共享密码" required/>
+          <button className="submit-source" type="button" disabled={saving || !writeToken} onClick={migrateLegacy}><Database size={17}/>{saving ? '正在处理…' : '导入旧网站数据'}</button>
           <label htmlFor="source-name">演出备注名称</label>
           <input id="source-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="例如：The Weeknd 香港站"/>
           <label htmlFor="source-url">选座页面完整网址</label>
           <div className="url-input"><Link2 size={17}/><textarea id="source-url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://www.moretickets.com/pick-seat?sessionId=..."/></div>
           {error && <p className="form-error">{error}</p>}
-          {saved && <p className="form-success"><CheckCircle2 size={14}/> 已加入监测队列</p>}
+          {saved && <p className="form-success"><CheckCircle2 size={14}/> 操作成功，数据已同步</p>}
           <div className="schedule-row"><div><Clock3 size={17}/><span><b>抓取频率</b><small>每 15 分钟</small></span></div><div><Database size={17}/><span><b>保存方式</b><small>多人共享云端保存</small></span></div></div>
           <button className="submit-source" type="submit" disabled={saving}><Plus size={17}/>{saving ? '正在保存…' : '加入监测队列'}</button>
         </form>
@@ -371,6 +386,16 @@ export default function App() {
     window.setTimeout(() => setRefreshing(false), 450)
   }
 
+  const migrateLegacy = async () => {
+    const response = await fetch('/api/migrate-legacy', {
+      method: 'POST',
+      headers: { 'x-radar-write-token': writeToken },
+    })
+    const data = await response.json().catch(() => ({}))
+    if (!response.ok) throw new Error(data.error || '旧网站数据导入失败')
+    applyCloudState(data)
+  }
+
   const addTarget = async (target) => {
     const nextTargets = [...targets, target]
     const groupIndex = showGroups.findIndex((show) => show.showId === target.showId || show.groupKey === target.showId)
@@ -447,7 +472,7 @@ export default function App() {
     <div className="app-shell">
       <Sidebar showGroups={showGroups} activeShow={activeShow} setActiveShow={setActiveShow} query={query} setQuery={setQuery} open={navOpen} setOpen={setNavOpen} onOpenSource={() => setSourceOpen(true)} onDeleteGroup={deleteGroup}/>
       {navOpen && <button className="nav-scrim" onClick={() => setNavOpen(false)} />}
-      {sourceOpen && <SourceModal onClose={() => setSourceOpen(false)} targets={targets} onAddTarget={addTarget} onDeleteTarget={deleteTarget} writeToken={writeToken} onWriteTokenChange={updateWriteToken}/>}
+      {sourceOpen && <SourceModal onClose={() => setSourceOpen(false)} targets={targets} onAddTarget={addTarget} onDeleteTarget={deleteTarget} onMigrateLegacy={migrateLegacy} writeToken={writeToken} onWriteTokenChange={updateWriteToken}/>}
       <main className="main">
         <header className="topbar">
           <button className="icon-btn menu-btn" onClick={() => setNavOpen(true)}><Menu size={20}/></button>
