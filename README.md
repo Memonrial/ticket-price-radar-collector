@@ -16,4 +16,4 @@ GitHub Actions 每两小时运行一次，也可以在仓库的 Actions 页面�
 
 ## 网站
 
-https://ticket-price-radar-cn.memonrial.chatgpt.site
+https://pjld666.memonrial.chatgpt.site
