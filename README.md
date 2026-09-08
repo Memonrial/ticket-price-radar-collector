@@ -17,3 +17,10 @@ GitHub Actions 每两小时运行一次，也可以在仓库的 Actions 页面�
 ## 网站
 
 https://pjld666.memonrial.chatgpt.site
+
+## 免费 Cloudflare 部署
+
+点击下面的按钮，将票价雷达部署到你自己的 Cloudflare 免费账户。Cloudflare 会自动创建 Worker 和 D1 数据库。部署时请设置至少 8 位的共享编辑密码。
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Memonrial/ticket-price-radar-collector/tree/main/cloudflare-site)
+
