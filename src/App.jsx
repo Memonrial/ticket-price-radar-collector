@@ -21,6 +21,7 @@ import {
   CalendarDays,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Clock3,
   Database,
@@ -319,26 +320,51 @@ function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, onMigrateL
   )
 }
 
-function CompareModal({ show, activeSessionId, onSelect, onClose }) {
+function ComparisonPage({ show, activeSessionId, onSelect, onBack }) {
   const sessions = [...show.sessions].sort((left, right) => `${left.date} ${left.time}`.localeCompare(`${right.date} ${right.time}`))
+  const data = sessions.filter((item) => !item.pending).map((item) => {
+    const snapshot = sessionSnapshot(show, item)
+    return { label: item.date ? item.date.slice(5).replace('-', '/') : '待识别', price: snapshot.lowest, count: snapshot.count, fullDate: item.date }
+  })
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="source-modal compare-modal" role="dialog" aria-modal="true" aria-label="多日期对比">
-        <div className="modal-head"><div><span className="modal-icon"><BarChart3 size={19}/></span><div><h3>多日期对比</h3><p>{show.artist} · {show.venue} · 同一演出的不同日期</p></div></div><button className="icon-btn" onClick={onClose}><X size={18}/></button></div>
-        <div className="compare-summary"><span>对比市场最低价、在售量和票档数量</span><b>{sessions.length} 个日期</b></div>
-        <div className="price-table-wrap compare-table-wrap"><table className="price-table compare-table"><thead><tr><th>演出日期</th><th>开场时间</th><th>市场最低价</th><th>页面在售</th><th>票档数量</th><th>状态</th><th></th></tr></thead><tbody>{sessions.map((item) => {
-          const snapshot = sessionSnapshot(show, item)
-          const archived = isFinishedSessionView(item)
-          return <tr key={item.id} className={item.id === activeSessionId ? 'active-row' : ''}><td><b>{item.date ? item.date.replaceAll('-', '/') : '待识别'}</b><small>{item.weekday || '等待抓取'}</small></td><td>{item.time || '—'}</td><td><strong>{snapshot.pending ? '待抓取' : currency(snapshot.lowest, show)}</strong></td><td>{snapshot.pending ? '—' : `${snapshot.count} 条`}</td><td>{item.tiers?.length || '—'}</td><td><span className="table-status">{archived ? '已归档' : snapshot.pending ? '等待抓取' : '监测中'}</span></td><td><button className="compare-select" onClick={() => onSelect(item.id)}>{item.id === activeSessionId ? '当前查看' : '查看'}</button></td></tr>
-        })}</tbody></table></div>
-      </section>
-    </div>
+    <main className="main comparison-main">
+      <header className="topbar comparison-topbar">
+        <button className="back-btn" onClick={onBack}><ChevronLeft size={17}/>返回单场监测</button>
+        <div className="breadcrumb"><span>市场监测</span><ChevronRight size={15}/><span>场次对比</span><ChevronRight size={15}/><b>{show.artist}</b></div>
+      </header>
+      <div className="content comparison-content">
+        <section className="comparison-hero">
+          <div><span className="comparison-kicker"><BarChart3 size={15}/>多日期市场对比</span><h1>{show.artist}</h1><p>{show.tour} · {show.venue}</p></div>
+          <div className="comparison-count"><b>{sessions.length}</b><span>个日期场次</span></div>
+        </section>
+        <section className="comparison-chart-panel">
+          <div className="panel-head"><div><h3>各日期市场最低价</h3><p>同一演出不同日期的当前市场数据对比</p></div><span className="table-status">{data.length} 个已采集</span></div>
+          <div className="comparison-chart"><ResponsiveContainer width="100%" height="100%"><BarChart data={data} margin={{ top: 18, right: 12, left: -8, bottom: 0 }}><CartesianGrid vertical={false} stroke="#eceef2" strokeDasharray="4 4"/><XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: '#89909b', fontSize: 12 }} dy={10}/><YAxis yAxisId="price" axisLine={false} tickLine={false} tick={{ fill: '#89909b', fontSize: 12 }} tickFormatter={(value) => currency(value, show)}/><Tooltip content={<TrendTooltip show={show}/>}/><Bar yAxisId="price" dataKey="price" fill="#ff725d" radius={[7, 7, 0, 0]} barSize={42}/></BarChart></ResponsiveContainer></div>
+        </section>
+        <section className="comparison-table-panel">
+          <div className="panel-head"><div><h3>场次数据明细</h3><p>点击“查看单场”返回该日期的趋势与票档详情</p></div></div>
+          <div className="price-table-wrap compare-table-wrap"><table className="price-table compare-table"><thead><tr><th>演出日期</th><th>开场时间</th><th>市场最低价</th><th>页面在售</th><th>票档数量</th><th>状态</th><th></th></tr></thead><tbody>{sessions.map((item) => {
+            const snapshot = sessionSnapshot(show, item)
+            const archived = isFinishedSessionView(item)
+            return <tr key={item.id} className={item.id === activeSessionId ? 'active-row' : ''}><td><b>{item.date ? item.date.replaceAll('-', '/') : '待识别'}</b><small>{item.weekday || '等待抓取'}</small></td><td>{item.time || '—'}</td><td><strong>{snapshot.pending ? '待抓取' : currency(snapshot.lowest, show)}</strong></td><td>{snapshot.pending ? '—' : `${snapshot.count} 条`}</td><td>{item.tiers?.length || '—'}</td><td><span className="table-status">{archived ? '已归档' : snapshot.pending ? '等待抓取' : '监测中'}</span></td><td><button className="compare-select" onClick={() => onSelect(item.id)}>{item.id === activeSessionId ? '当前单场' : '查看单场'}</button></td></tr>
+          })}</tbody></table></div>
+        </section>
+      </div>
+    </main>
   )
 }
 
 function isFinishedSessionView(session) {
   const endTime = sessionEndTime(session)
   return !session.pending && endTime !== null && endTime <= Date.now()
+}
+
+function getPageFromHash() {
+  return window.location.hash === '#compare' ? 'compare' : 'dashboard'
+}
+
+function setPageHash(page) {
+  window.location.hash = page === 'compare' ? 'compare' : ''
 }
 
 export default function App() {
@@ -353,7 +379,7 @@ export default function App() {
   const [navOpen, setNavOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [sourceOpen, setSourceOpen] = useState(false)
-  const [compareOpen, setCompareOpen] = useState(false)
+  const [page, setPage] = useState(() => getPageFromHash())
   const [cloudReady, setCloudReady] = useState(false)
   const [syncError, setSyncError] = useState('')
   const revisionRef = useRef(0)
@@ -427,6 +453,12 @@ export default function App() {
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
   }, []) // 初次迁移浏览器旧数据，之后以云端为准
+
+  useEffect(() => {
+    const onHashChange = () => setPage(getPageFromHash())
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [])
 
   useEffect(() => {
     if (!activeShow.sessions.some((item) => item.id === sessionId)) setSessionId(activeShow.sessions[0].id)
@@ -567,13 +599,22 @@ export default function App() {
     }
   }
 
+  const openComparison = () => {
+    setPage('compare')
+    setPageHash('compare')
+  }
+
+  const closeComparison = () => {
+    setPage('dashboard')
+    setPageHash('dashboard')
+  }
+
   return (
     <div className="app-shell">
-      <Sidebar showGroups={showGroups} activeShow={activeShow} setActiveShow={setActiveShow} query={query} setQuery={setQuery} open={navOpen} setOpen={setNavOpen} onOpenSource={() => setSourceOpen(true)} onDeleteGroup={deleteGroup}/>
+      <Sidebar showGroups={showGroups} activeShow={activeShow} setActiveShow={(show) => { setActiveShow(show); if (page === 'compare') closeComparison() }} query={query} setQuery={setQuery} open={navOpen} setOpen={setNavOpen} onOpenSource={() => setSourceOpen(true)} onDeleteGroup={deleteGroup}/>
       {navOpen && <button className="nav-scrim" onClick={() => setNavOpen(false)} />}
-      {sourceOpen && <SourceModal onClose={() => setSourceOpen(false)} targets={targets} onAddTarget={addTarget} onDeleteTarget={deleteTarget} onMigrateLegacy={migrateLegacy}/>}
-      {compareOpen && <CompareModal show={activeShow} activeSessionId={sessionId} onClose={() => setCompareOpen(false)} onSelect={(id) => { setSessionId(id); setCompareOpen(false) }}/>} 
-      <main className="main">
+      {sourceOpen && <SourceModal onClose={() => setSourceOpen(false)} targets={targets} onAddTarget={addTarget} onDeleteTarget={deleteTarget} onMigrateLegacy={migrateLegacy}/>} 
+      {page === 'compare' ? <ComparisonPage show={activeShow} activeSessionId={sessionId} onBack={closeComparison} onSelect={(id) => { setSessionId(id); closeComparison() }}/> : <main className="main">
         <header className="topbar">
           <button className="icon-btn menu-btn" onClick={() => setNavOpen(true)}><Menu size={20}/></button>
           <div className="breadcrumb"><span>市场监测</span><ChevronRight size={15}/><b>{activeShow.artist}</b></div>
@@ -601,7 +642,7 @@ export default function App() {
             <div className="session-tabs">
               {activeShow.sessions.map((item) => <button key={item.id} className={session.id === item.id ? 'active' : ''} onClick={() => setSessionId(item.id)}><b>{item.pending ? '待识别' : item.date.slice(5).replace('-', '/')}</b><span>{item.pending ? '等待首次抓取' : `${item.weekday} ${item.time}`}</span></button>)}
             </div>
-            <button className="filter-btn compare-trigger" disabled={activeShow.sessions.length < 2} onClick={() => setCompareOpen(true)}><BarChart3 size={16}/>场次对比</button>
+            <button className="filter-btn compare-trigger" disabled={activeShow.sessions.length < 2} onClick={openComparison}><BarChart3 size={16}/>场次对比</button>
           </section>
 
           {session.pending ? <section className="pending-panel">
@@ -666,7 +707,7 @@ export default function App() {
 
           <footer className="page-footer"><span><Sparkles size={14}/>票价雷达 · {session.pending ? '新日期已进入监测队列' : activeShow.live ? '当前演出为真实页面快照' : '当前演出为演示数据'}</span><span>{session.pending ? '等待首次抓取并自动归类' : activeShow.live ? `来源 MoreTickets · ${session.lastCollected}` : '真实接入后按场次与票档自动去重'}</span></footer>
         </div>
-      </main>
+      </main>}
     </div>
   )
 }
