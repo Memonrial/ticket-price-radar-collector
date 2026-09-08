@@ -1,0 +1,28 @@
+{
+  "name": "ticket-price-radar-cloudflare",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build-site.mjs",
+    "db:migrate": "wrangler d1 migrations apply DB --remote",
+    "deploy": "npm run db:migrate && wrangler deploy"
+  },
+  "dependencies": {
+    "lucide-react": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "recharts": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "wrangler": "latest"
+  },
+  "cloudflare": {
+    "bindings": {
+      "RADAR_WRITE_TOKEN": {
+        "description": "设置一个至少8位的共享编辑密码。只有知道密码的人才能新增、删除或上传抓取数据。"
+      }
+    }
+  }
+}
