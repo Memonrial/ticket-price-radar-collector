@@ -1,4 +1,5 @@
 const STATIC_ASSETS = /*__STATIC_ASSETS__*/
+const LEGACY_STATE_URL = 'https://pjld666.memonrial.chatgpt.site/api/shared-state'
 
 const json = (value, status = 200) => new Response(JSON.stringify(value), {
   status,
@@ -73,6 +74,18 @@ async function writeState(request, db) {
   ).bind(payload.targetsJson, payload.showGroupsJson, now, payload.baseRevision).run()
   if (Number(result.meta?.changes || 0) === 0) return json({ error: '共享数据已发生变化', state: await readState(db) }, 409)
   return json(await readState(db))
+}
+
+async function migrateLegacyState(db) {
+  const response = await fetch(LEGACY_STATE_URL, { headers: { accept: 'application/json' } })
+  if (!response.ok) throw new Error('旧网站数据暂时无法读取')
+  const state = await response.json()
+  const payload = validateState(state)
+  const now = new Date().toISOString()
+  await db.prepare(
+    'UPDATE shared_radar_state SET targets_json = ?, show_groups_json = ?, revision = revision + 1, updated_at = ? WHERE id = 1',
+  ).bind(payload.targetsJson, payload.showGroupsJson, now).run()
+  return readState(db)
 }
 
 function finiteNumber(value, fallback = null) {
@@ -264,6 +277,11 @@ export default {
           return await writeState(request, env.DB)
         }
         return json({ error: '不支持的操作' }, 405)
+      }
+      if (url.pathname === '/api/migrate-legacy') {
+        if (request.method !== 'POST') return json({ error: '不支持的操作' }, 405)
+        if (!canWrite(request, env)) return json({ error: '共享编辑密码错误' }, 401)
+        return json(await migrateLegacyState(env.DB))
       }
       if (url.pathname === '/api/collector/snapshot') {
         if (request.method === 'POST') {
