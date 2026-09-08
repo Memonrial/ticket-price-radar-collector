@@ -45,6 +45,19 @@ const initialShows = []
 
 const points = ['09/02', '09/03', '09/04', '09/05', '09/06', '09/07', '09/08']
 
+function readLocalValue(key, fallback = '') {
+  try { return window.localStorage.getItem(key) ?? fallback } catch { return fallback }
+}
+
+function writeLocalValue(key, value) {
+  try {
+    if (value) window.localStorage.setItem(key, value)
+    else window.localStorage.removeItem(key)
+  } catch {
+    // Some in-app browsers disable local storage. Cloud data remains available.
+  }
+}
+
 function seedOf(text) {
   return [...text].reduce((n, char) => n + char.charCodeAt(0), 0)
 }
@@ -284,7 +297,7 @@ export default function App() {
   const [navOpen, setNavOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [sourceOpen, setSourceOpen] = useState(false)
-  const [writeToken, setWriteToken] = useState(() => localStorage.getItem('ticket-radar-write-token') || '')
+  const [writeToken, setWriteToken] = useState(() => readLocalValue('ticket-radar-write-token'))
   const [cloudReady, setCloudReady] = useState(false)
   const [syncError, setSyncError] = useState('')
   const revisionRef = useRef(0)
@@ -310,8 +323,7 @@ export default function App() {
 
   const updateWriteToken = useCallback((value) => {
     setWriteToken(value)
-    if (value) localStorage.setItem('ticket-radar-write-token', value)
-    else localStorage.removeItem('ticket-radar-write-token')
+    writeLocalValue('ticket-radar-write-token', value)
   }, [])
 
   const saveCloudState = useCallback(async (nextTargets, nextGroups) => {
