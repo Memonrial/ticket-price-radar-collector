@@ -88,6 +88,20 @@ function finiteNumber(value, fallback = null) {
   return Number.isFinite(number) ? number : fallback
 }
 
+function cleanVenue(value) {
+  const text = String(value || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^(?:venue|location|address|场馆|场地|地点)\s*[:：-]?\s*/i, '')
+    .trim()
+  if (!text || text.length > 120) return ''
+  if (/^(?:待识别|待补充|unknown|n\/a|null|undefined)$/i.test(text)) return ''
+  if (/(?:https?:\/\/|data:|\[object|undefined|null)/i.test(text)) return ''
+  const meaningful = text.match(/[\p{L}\p{N}]/gu) || []
+  const unusual = text.match(/[^\p{L}\p{N}\s·&()（）,，.。\-/'"]/gu) || []
+  if (!meaningful.length || unusual.length > Math.max(3, text.length * 0.12)) return ''
+  return text
+}
+
 function chinaTime(iso) {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return { full: iso, short: iso }
@@ -112,7 +126,7 @@ function normalizedSnapshot(raw) {
     sessionId,
     showId,
     showName: String(raw.show_name || '').trim().slice(0, 240),
-    venue: String(raw.venue || '').trim().slice(0, 240),
+    venue: cleanVenue(raw.venue),
     city: String(raw.city || '').trim().slice(0, 80),
     sessionDate: String(raw.session_date || '').slice(0, 10),
     sessionTime: String(raw.session_time || '').slice(0, 5),
@@ -176,7 +190,7 @@ function mergeSnapshotIntoState(state, snapshot) {
   group.artist = snapshot.showName || group.artist || target.name
   if (String(group.tour || '').includes('等待首次抓取')) group.tour = snapshot.sessionText || 'MoreTickets 市场监测'
   group.city = snapshot.city || (group.city === '待识别' ? '待补充' : group.city)
-  group.venue = snapshot.venue || (group.venue === '待识别地点' ? '待补充地点' : group.venue)
+  group.venue = snapshot.venue || cleanVenue(group.venue) || '待补充地点'
   group.status = '监测中'
   group.currency = snapshot.currency
   group.live = true
@@ -281,12 +295,37 @@ async function scrapeMoreTickets(targetUrl, env) {
 
     const pageInfo = await page.evaluate(() => {
       const text = (selector) => document.querySelector(selector)?.textContent?.trim() || ''
-      const venueSelectors = ['.venue-name', '.show-venue', '.address', "[class*='venue']"]
+      const cleanVenueCandidate = (value) => {
+        const clean = String(value || '')
+          .replace(/\s+/g, ' ')
+          .replace(/^(?:venue|location|address|场馆|场地|地点)\s*[:：-]?\s*/i, '')
+          .trim()
+        if (!clean || clean.length > 120) return ''
+        if (/(?:https?:\/\/|data:|\[object|undefined|null)/i.test(clean)) return ''
+        const meaningful = clean.match(/[\p{L}\p{N}]/gu) || []
+        const unusual = clean.match(/[^\p{L}\p{N}\s·&()（）,，.。\-/'"]/gu) || []
+        return meaningful.length && unusual.length <= Math.max(3, clean.length * 0.12) ? clean : ''
+      }
+      const candidates = []
+      const addCandidate = (element, priority) => {
+        const value = cleanVenueCandidate(element?.textContent)
+        if (value) candidates.push({ value, priority, length: value.length })
+      }
+      const venueSelectors = [
+        '.venue-name', '.show-venue-name', '.show-venue', '.show-address', '.show-location',
+        '.venue', '.location', '.address', "[data-testid*='venue' i]", "[data-testid*='location' i]", "[data-testid*='address' i]",
+      ]
+      venueSelectors.forEach((selector, priority) => document.querySelectorAll(selector).forEach((element) => addCandidate(element, priority)))
+      document.querySelectorAll('[class]').forEach((element) => {
+        const isVenueField = [...element.classList].some((className) => /(?:^|[-_])(venue|location|address)(?:[-_]|$)/i.test(className))
+        if (isVenueField) addCandidate(element, 20)
+      })
+      candidates.sort((left, right) => left.priority - right.priority || left.length - right.length)
       return {
         showName: text('.tour-name'),
         sessionText: text('.date-time'),
         countText: text('.inventory-count'),
-        venue: venueSelectors.map((selector) => text(selector)).find(Boolean) || '',
+        venue: candidates[0]?.value || '',
       }
     })
     const zones = await page.$$eval('.zone', (elements) => elements.map((element) => ({
