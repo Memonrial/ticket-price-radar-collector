@@ -29,5 +29,5 @@ jobs:
         run: pip install --disable-pip-version-check -r collector/requirements.txt
       - name: Collect all monitored events
         env:
-          RADAR_SITE_URL: https://pjld666.memonrial.chatgpt.site
+          RADAR_SITE_URL: https://ticket-price-radar.weichenliu44.workers.dev
         run: python collector/scrape_moretickets.py --from-site --upload-site

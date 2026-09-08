@@ -219,6 +219,13 @@ def upload_to_site(site_url: str, snapshot: dict) -> None:
     )
     if not response.ok:
         raise RuntimeError(f"网站拒绝了抓取结果：{response.status_code} {response.text[:300]}")
+    try:
+        result = response.json()
+    except requests.JSONDecodeError as error:
+        raise RuntimeError(f"网站返回的不是有效确认信息：{response.text[:300]}") from error
+    if not result.get("ok"):
+        raise RuntimeError(f"网站未确认抓取结果：{response.text[:300]}")
+    print(f"Uploaded {snapshot['session_id']} to {site_url}")
 
 
 async def main() -> None:
@@ -229,7 +236,7 @@ async def main() -> None:
     parser.add_argument("--upload", action="store_true", help="Upload to Supabase using environment variables")
     parser.add_argument("--from-site", action="store_true", help="Read all active monitoring URLs from the shared website")
     parser.add_argument("--upload-site", action="store_true", help="Upload each snapshot to the shared website database")
-    parser.add_argument("--site-url", default=os.getenv("RADAR_SITE_URL", "https://ticket-price-radar-cn.memonrial.chatgpt.site"))
+    parser.add_argument("--site-url", default=os.getenv("RADAR_SITE_URL", "https://ticket-price-radar.weichenliu44.workers.dev"))
     args = parser.parse_args()
 
     urls = [args.url] if args.url else []
