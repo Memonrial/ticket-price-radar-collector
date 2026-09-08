@@ -13,7 +13,7 @@
     {
       "binding": "DB",
       "database_name": "ticket-price-radar-db",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "ada5436c-3f5b-43c3-bfe9-cef7386d5558",
       "migrations_dir": "migrations"
     }
   ]
