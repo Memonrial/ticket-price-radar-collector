@@ -374,8 +374,26 @@ export default function App() {
 
   const refresh = async () => {
     setRefreshing(true)
-    await loadCloudState(false)
-    window.setTimeout(() => setRefreshing(false), 450)
+    try {
+      const target = targets.find((item) => item.id === session.id)
+      if (activeShow.live && target && !session.pending) {
+        const response = await fetch('/api/collect-now', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: session.id }),
+        })
+        const data = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(data.error || '本次抓取暂时不可用')
+        if (data.state) applyCloudState(data.state)
+      } else {
+        await loadCloudState(false)
+      }
+      setSyncError('')
+    } catch (error) {
+      setSyncError(error?.message || '刷新失败，请稍后重试')
+    } finally {
+      setRefreshing(false)
+    }
   }
 
   const migrateLegacy = async () => {
