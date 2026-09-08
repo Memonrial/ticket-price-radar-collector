@@ -320,12 +320,63 @@ function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, onMigrateL
   )
 }
 
+function sessionOptionLabel(session) {
+  return session.pending ? '待识别场次' : `${session.date.replaceAll('-', '/')} ${session.weekday || ''} ${session.time || ''}`.trim()
+}
+
+function mergeComparisonSeries(firstSeries, secondSeries, metric) {
+  const rows = new Map()
+  const add = (series, key) => series.forEach((point, index) => {
+    const collectedAt = String(point.collectedAt || '')
+    const bucket = collectedAt ? collectedAt.slice(0, 16) : `${point.time || '采集'}-${index}`
+    const timestamp = collectedAt ? new Date(collectedAt).getTime() : index
+    const current = rows.get(bucket) || { time: point.time || '最新', timestamp }
+    current[key] = Number(point[metric])
+    rows.set(bucket, current)
+  })
+  add(firstSeries, 'first')
+  add(secondSeries, 'second')
+  return [...rows.values()].sort((left, right) => left.timestamp - right.timestamp)
+}
+
+function ComparisonTooltip({ active, payload, label, show, metric }) {
+  if (!active || !payload?.length) return null
+  return <div className="chart-tooltip comparison-tooltip"><span>{label} · 采集批次</span>{payload.map((item) => <div key={item.dataKey}><i style={{ background: item.color }}/><em>{item.name}</em><strong>{metric === 'price' ? currency(item.value, show) : `${Number(item.value).toLocaleString('zh-CN')} 条`}</strong></div>)}</div>
+}
+
+function TierComparisonCard({ show, label, firstSession, secondSession, firstTier, secondTier, firstName, secondName, metric, range }) {
+  const firstSeries = firstTier === undefined ? [] : filterTrend(marketFor(show, firstSession, firstTier), range)
+  const secondSeries = secondTier === undefined ? [] : filterTrend(marketFor(show, secondSession, secondTier), range)
+  const data = mergeComparisonSeries(firstSeries, secondSeries, metric)
+  const firstCurrent = firstSeries.at(-1)?.[metric]
+  const secondCurrent = secondSeries.at(-1)?.[metric]
+  return <article className="tier-compare-card">
+    <div className="tier-compare-head"><div><span>页面原始票档</span><h3>{label}</h3></div><span>{range}</span></div>
+    <div className="tier-compare-values"><div><i className="compare-a-dot"/><span>{firstName}</span><b>{firstCurrent === undefined ? '无此票档' : metric === 'price' ? currency(firstCurrent, show) : `${firstCurrent} 条`}</b></div><div><i className="compare-b-dot"/><span>{secondName}</span><b>{secondCurrent === undefined ? '无此票档' : metric === 'price' ? currency(secondCurrent, show) : `${secondCurrent} 条`}</b></div></div>
+    <div className="tier-comparison-chart">{data.length ? <ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ top: 12, right: 8, left: -18, bottom: 0 }}><CartesianGrid vertical={false} stroke="#edf0f3" strokeDasharray="4 4"/><XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: '#a0a6af', fontSize: 9 }}/><YAxis axisLine={false} tickLine={false} tick={{ fill: '#a0a6af', fontSize: 9 }} tickFormatter={(value) => metric === 'price' ? currency(value, show) : value}/><Tooltip content={<ComparisonTooltip show={show} metric={metric}/>}/><Line name={firstName} type="monotone" dataKey="first" connectNulls stroke="#ff5b43" strokeWidth={2.4} dot={{ r: 2.5 }}/><Line name={secondName} type="monotone" dataKey="second" connectNulls stroke="#5a67f2" strokeWidth={2.4} dot={{ r: 2.5 }}/></LineChart></ResponsiveContainer> : <div className="comparison-empty">等待形成趋势数据</div>}</div>
+  </article>
+}
+
 function ComparisonPage({ show, activeSessionId, onSelect, onBack }) {
   const sessions = [...show.sessions].sort((left, right) => `${left.date} ${left.time}`.localeCompare(`${right.date} ${right.time}`))
-  const data = sessions.filter((item) => !item.pending).map((item) => {
-    const snapshot = sessionSnapshot(show, item)
-    return { label: item.date ? item.date.slice(5).replace('-', '/') : '待识别', price: snapshot.lowest, count: snapshot.count, fullDate: item.date }
-  })
+  const defaultFirst = sessions.find((item) => item.id === activeSessionId)?.id || sessions[0]?.id || ''
+  const [firstId, setFirstId] = useState(defaultFirst)
+  const [secondId, setSecondId] = useState(sessions.find((item) => item.id !== defaultFirst)?.id || defaultFirst)
+  const [comparisonRange, setComparisonRange] = useState('7天')
+  const [overallMetric, setOverallMetric] = useState('price')
+  const [tierMetric, setTierMetric] = useState('price')
+  const firstSession = sessions.find((item) => item.id === firstId) || sessions[0]
+  const secondSession = sessions.find((item) => item.id === secondId) || sessions[1] || sessions[0]
+  const firstSnapshot = sessionSnapshot(show, firstSession)
+  const secondSnapshot = sessionSnapshot(show, secondSession)
+  const firstName = sessionOptionLabel(firstSession)
+  const secondName = sessionOptionLabel(secondSession)
+  const firstOverall = filterTrend(firstSession.history?.length ? firstSession.history : [{ time: '最新', price: firstSnapshot.lowest, count: firstSnapshot.count }], comparisonRange)
+  const secondOverall = filterTrend(secondSession.history?.length ? secondSession.history : [{ time: '最新', price: secondSnapshot.lowest, count: secondSnapshot.count }], comparisonRange)
+  const overallData = mergeComparisonSeries(firstOverall, secondOverall, overallMetric)
+  const firstTierMap = new Map(firstSession.tiers.map((tier) => [tierLabel(firstSession, tier), tier]))
+  const secondTierMap = new Map(secondSession.tiers.map((tier) => [tierLabel(secondSession, tier), tier]))
+  const tierLabels = [...new Set([...firstTierMap.keys(), ...secondTierMap.keys()])]
   return (
     <main className="main comparison-main">
       <header className="topbar comparison-topbar">
@@ -334,21 +385,28 @@ function ComparisonPage({ show, activeSessionId, onSelect, onBack }) {
       </header>
       <div className="content comparison-content">
         <section className="comparison-hero">
-          <div><span className="comparison-kicker"><BarChart3 size={15}/>多日期市场对比</span><h1>{show.artist}</h1><p>{show.tour} · {show.venue}</p></div>
-          <div className="comparison-count"><b>{sessions.length}</b><span>个日期场次</span></div>
+          <div><span className="comparison-kicker"><BarChart3 size={15}/>双场次交互对比</span><h1>{show.artist}</h1><p>{show.tour} · {show.venue}</p></div>
+          <div className="comparison-count"><b>{tierLabels.length}</b><span>个票档参与对比</span></div>
+        </section>
+        <section className="comparison-picker-panel">
+          <div className="comparison-picker"><label><span><i className="compare-a-dot"/>场次 A</span><select value={firstId} onChange={(event) => setFirstId(event.target.value)}>{sessions.map((item) => <option key={item.id} value={item.id} disabled={item.id === secondId}>{sessionOptionLabel(item)}</option>)}</select></label><label><span><i className="compare-b-dot"/>场次 B</span><select value={secondId} onChange={(event) => setSecondId(event.target.value)}>{sessions.map((item) => <option key={item.id} value={item.id} disabled={item.id === firstId}>{sessionOptionLabel(item)}</option>)}</select></label></div>
+          <div className="comparison-range"><span>趋势范围</span><div className="segmented">{['24小时', '7天', '15天'].map((item) => <button key={item} className={comparisonRange === item ? 'active' : ''} onClick={() => setComparisonRange(item)}>{item}</button>)}</div></div>
+        </section>
+        <section className="selected-session-grid">
+          <article className="selected-session-card first"><div><span>场次 A</span><b>{firstName}</b></div><dl><div><dt>市场最低价</dt><dd>{firstSnapshot.pending ? '待抓取' : currency(firstSnapshot.lowest, show)}</dd></div><div><dt>页面在售</dt><dd>{firstSnapshot.pending ? '—' : `${firstSnapshot.count} 条`}</dd></div><div><dt>票档</dt><dd>{firstSession.tiers.length} 档</dd></div></dl></article>
+          <article className="selected-session-card second"><div><span>场次 B</span><b>{secondName}</b></div><dl><div><dt>市场最低价</dt><dd>{secondSnapshot.pending ? '待抓取' : currency(secondSnapshot.lowest, show)}</dd></div><div><dt>页面在售</dt><dd>{secondSnapshot.pending ? '—' : `${secondSnapshot.count} 条`}</dd></div><div><dt>票档</dt><dd>{secondSession.tiers.length} 档</dd></div></dl></article>
         </section>
         <section className="comparison-chart-panel">
-          <div className="panel-head"><div><h3>各日期市场最低价</h3><p>同一演出不同日期的当前市场数据对比</p></div><span className="table-status">{data.length} 个已采集</span></div>
-          <div className="comparison-chart"><ResponsiveContainer width="100%" height="100%"><BarChart data={data} margin={{ top: 18, right: 12, left: -8, bottom: 0 }}><CartesianGrid vertical={false} stroke="#eceef2" strokeDasharray="4 4"/><XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: '#89909b', fontSize: 12 }} dy={10}/><YAxis yAxisId="price" axisLine={false} tickLine={false} tick={{ fill: '#89909b', fontSize: 12 }} tickFormatter={(value) => currency(value, show)}/><Tooltip content={<TrendTooltip show={show}/>}/><Bar yAxisId="price" dataKey="price" fill="#ff725d" radius={[7, 7, 0, 0]} barSize={42}/></BarChart></ResponsiveContainer></div>
+          <div className="panel-head"><div><h3>场次整体趋势对比</h3><p>两场的市场最低价与页面在售票数变化</p></div><div className="view-switch"><button className={overallMetric === 'price' ? 'active' : ''} onClick={() => setOverallMetric('price')}>最低价趋势</button><button className={overallMetric === 'count' ? 'active' : ''} onClick={() => setOverallMetric('count')}>在售量趋势</button></div></div>
+          <div className="comparison-legend"><span><i className="compare-a-dot"/>{firstName}</span><span><i className="compare-b-dot"/>{secondName}</span></div>
+          <div className="comparison-chart">{overallData.length ? <ResponsiveContainer width="100%" height="100%"><LineChart data={overallData} margin={{ top: 18, right: 18, left: -4, bottom: 0 }}><CartesianGrid vertical={false} stroke="#eceef2" strokeDasharray="4 4"/><XAxis dataKey="time" axisLine={false} tickLine={false} tick={{ fill: '#89909b', fontSize: 11 }} dy={10}/><YAxis axisLine={false} tickLine={false} tick={{ fill: '#89909b', fontSize: 11 }} tickFormatter={(value) => overallMetric === 'price' ? currency(value, show) : value}/><Tooltip content={<ComparisonTooltip show={show} metric={overallMetric}/>}/><Line name={firstName} type="monotone" dataKey="first" connectNulls stroke="#ff5b43" strokeWidth={3} dot={{ r: 3 }}/><Line name={secondName} type="monotone" dataKey="second" connectNulls stroke="#5a67f2" strokeWidth={3} dot={{ r: 3 }}/></LineChart></ResponsiveContainer> : <div className="comparison-empty">等待两场形成趋势数据</div>}</div>
         </section>
         <section className="comparison-table-panel">
-          <div className="panel-head"><div><h3>场次数据明细</h3><p>点击“查看单场”返回该日期的趋势与票档详情</p></div></div>
-          <div className="price-table-wrap compare-table-wrap"><table className="price-table compare-table"><thead><tr><th>演出日期</th><th>开场时间</th><th>市场最低价</th><th>页面在售</th><th>票档数量</th><th>状态</th><th></th></tr></thead><tbody>{sessions.map((item) => {
-            const snapshot = sessionSnapshot(show, item)
-            const archived = isFinishedSessionView(item)
-            return <tr key={item.id} className={item.id === activeSessionId ? 'active-row' : ''}><td><b>{item.date ? item.date.replaceAll('-', '/') : '待识别'}</b><small>{item.weekday || '等待抓取'}</small></td><td>{item.time || '—'}</td><td><strong>{snapshot.pending ? '待抓取' : currency(snapshot.lowest, show)}</strong></td><td>{snapshot.pending ? '—' : `${snapshot.count} 条`}</td><td>{item.tiers?.length || '—'}</td><td><span className="table-status">{archived ? '已归档' : snapshot.pending ? '等待抓取' : '监测中'}</span></td><td><button className="compare-select" onClick={() => onSelect(item.id)}>{item.id === activeSessionId ? '当前单场' : '查看单场'}</button></td></tr>
-          })}</tbody></table></div>
+          <div className="panel-head"><div><h3>每个票档趋势对比</h3><p>按 MoreTickets 页面原始票档逐一对比，不混合不同票档</p></div><div className="view-switch"><button className={tierMetric === 'price' ? 'active' : ''} onClick={() => setTierMetric('price')}>票档价格趋势</button><button className={tierMetric === 'count' ? 'active' : ''} onClick={() => setTierMetric('count')}>票档在售趋势</button></div></div>
+          <div className="tier-comparison-grid">{tierLabels.map((label) => <TierComparisonCard key={label} show={show} label={label} firstSession={firstSession} secondSession={secondSession} firstTier={firstTierMap.get(label)} secondTier={secondTierMap.get(label)} firstName={firstName} secondName={secondName} metric={tierMetric} range={comparisonRange}/>)}</div>
+          {!tierLabels.length && <div className="comparison-empty large">两个场次尚未抓取到可比较的票档</div>}
         </section>
+        <div className="comparison-actions"><button onClick={() => onSelect(firstSession.id)}>查看场次 A 单场详情</button><button onClick={() => onSelect(secondSession.id)}>查看场次 B 单场详情</button></div>
       </div>
     </main>
   )
