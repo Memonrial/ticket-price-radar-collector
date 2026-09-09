@@ -144,11 +144,13 @@ function Countdown({ date, time }) {
 
 function TrendTooltip({ active, payload, label, show }) {
   if (!active || !payload?.length) return null
+  const pricePoint = payload.find((item) => item.dataKey === 'price')
+  const countPoint = payload.find((item) => item.dataKey === 'count')
   return (
     <div className="chart-tooltip">
       <span>{label} · 采集批次</span>
-      <strong>{currency(payload[0].value, show)}</strong>
-      {payload[1] && <em>在售 {payload[1].value} 张</em>}
+      {pricePoint && <strong>{currency(pricePoint.value, show)}</strong>}
+      {countPoint && <em>在售 {Number(countPoint.value).toLocaleString('zh-CN')} 张</em>}
     </div>
   )
 }
