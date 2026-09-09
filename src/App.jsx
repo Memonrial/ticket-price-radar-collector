@@ -124,7 +124,16 @@ function sessionSnapshot(show, session) {
   return { lowest, prevLowest, count, change: ((lowest - prevLowest) / prevLowest) * 100, firstBatch: Boolean(session.livePrices) }
 }
 
-const currency = (value, show) => Number.isFinite(Number(value)) ? `${show?.currency || '¥'}${Number(value).toLocaleString('zh-CN')}` : '—'
+const HKD_TO_CNY_FALLBACK = 0.855
+
+const currency = (value, show) => {
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) return '—'
+  const displayAmount = show?.currency === 'HK$'
+    ? amount * (Number(show?.hkdToCnyRate) || HKD_TO_CNY_FALLBACK)
+    : amount
+  return `¥${Math.round(displayAmount).toLocaleString('zh-CN')}`
+}
 
 function Countdown({ date, time }) {
   const [now, setNow] = useState(Date.now())
@@ -765,7 +774,7 @@ export default function App() {
           </section>}
           </>}
 
-          <footer className="page-footer"><span><Sparkles size={14}/>票价雷达 · {session.pending ? '新日期已进入监测队列' : activeShow.live ? '当前演出为真实页面快照' : '当前演出为演示数据'}</span><span>{session.pending ? '等待首次抓取并自动归类' : activeShow.live ? `来源 MoreTickets · ${session.lastCollected}` : '真实接入后按场次与票档自动去重'}</span></footer>
+          <footer className="page-footer"><span><Sparkles size={14}/>票价雷达 · {session.pending ? '新日期已进入监测队列' : activeShow.live ? '当前演出为真实页面快照' : '当前演出为演示数据'}</span><span>{session.pending ? '等待首次抓取并自动归类' : activeShow.live ? `来源 MoreTickets · ${session.lastCollected}${activeShow.currency === 'HK$' ? ` · 港币按 1 HK$ ≈ ¥${(Number(activeShow.hkdToCnyRate) || HKD_TO_CNY_FALLBACK).toFixed(4)} 换算` : ''}` : '真实接入后按场次与票档自动去重'}</span></footer>
         </div>
       </main>}
     </div>
