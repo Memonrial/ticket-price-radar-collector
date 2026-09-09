@@ -13,7 +13,7 @@
     "binding": "BROWSER"
   },
   "triggers": {
-    "crons": ["17 0,5,10,15,20 * * *"]
+    "crons": ["17 */5 * * *"]
   },
   "d1_databases": [
     {
