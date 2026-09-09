@@ -194,7 +194,7 @@ function Sidebar({ showGroups, activeShow, setActiveShow, query, setQuery, open,
         <div><span className="live-dot"></span><b>MoreTickets 已接入</b></div>
         <p>新增链接后立即抓取首批数据</p>
         <div className="source-progress"><i></i></div>
-        <small>计划任务：每 2 小时一次</small>
+        <small>每小时检查 · 满 5 小时自动采集</small>
       </div>
       <div className="side-footer"><button onClick={onOpenSource}><Settings2 size={17}/> 数据源设置</button><span>v1.2</span></div>
     </aside>
@@ -291,7 +291,7 @@ function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, onMigrateL
         return
       }
       setSaving(true)
-      const result = await onAddTarget({ ...ids, name: name || `待识别演出 ${targets.length + 1}`, url, interval: 120, status: '正在抓取首批数据' })
+      const result = await onAddTarget({ ...ids, name: name || `待识别演出 ${targets.length + 1}`, url, interval: 300, status: '正在抓取首批数据' })
       setUrl('')
       setName('')
       setError('')
@@ -309,7 +309,7 @@ function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, onMigrateL
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="source-modal" role="dialog" aria-modal="true" aria-label="数据源管理">
-        <div className="modal-head"><div><span className="modal-icon"><Database size={19}/></span><div><h3>数据源管理</h3><p>新增链接立即抓取首批价格，之后每 2 小时自动更新</p></div></div><button className="icon-btn" onClick={onClose}><X size={18}/></button></div>
+        <div className="modal-head"><div><span className="modal-icon"><Database size={19}/></span><div><h3>数据源管理</h3><p>新增链接立即抓取首批价格，之后约每 5 小时自动更新</p></div></div><button className="icon-btn" onClick={onClose}><X size={18}/></button></div>
         <form onSubmit={submit}>
           <label>平台</label>
           <div className="platform-field"><span className="live-dot"></span><b>MoreTickets</b><small>页面结构已识别</small></div>
@@ -320,11 +320,11 @@ function SourceModal({ onClose, targets, onAddTarget, onDeleteTarget, onMigrateL
           <div className="url-input"><Link2 size={17}/><textarea id="source-url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://www.moretickets.com/pick-seat?sessionId=..."/></div>
           {error && <p className="form-error">{error}</p>}
           {successMessage && <p className="form-success"><CheckCircle2 size={14}/> {successMessage}</p>}
-          <div className="schedule-row"><div><Clock3 size={17}/><span><b>抓取频率</b><small>立即抓取；之后每 2 小时</small></span></div><div><Database size={17}/><span><b>保存方式</b><small>多人共享云端保存</small></span></div></div>
+          <div className="schedule-row"><div><Clock3 size={17}/><span><b>抓取频率</b><small>每小时检查；满 5 小时采集</small></span></div><div><Database size={17}/><span><b>保存方式</b><small>多人共享云端保存</small></span></div></div>
           <button className="submit-source" type="submit" disabled={saving}><Plus size={17}/>{saving ? '正在抓取首批数据…' : '加入并立即抓取'}</button>
         </form>
         <div className="target-list-head"><span>当前监测网址</span><b>{targets.length}</b></div>
-        <div className="target-list">{targets.map((target) => <article key={target.id}><div><span className="target-logo">M</span><div><b>{target.name}</b><small>{target.status} · {Number(target.interval) === 120 ? '每 2 小时自动更新' : `${target.interval}分钟/次`}</small></div></div><div className="target-actions"><a href={target.url} target="_blank" rel="noreferrer" aria-label={`打开${target.name}`}><ExternalLink size={15}/></a><button aria-label={`删除${target.name}`} onClick={() => onDeleteTarget(target)}><Trash2 size={15}/></button></div></article>)}</div>
+        <div className="target-list">{targets.map((target) => <article key={target.id}><div><span className="target-logo">M</span><div><b>{target.name}</b><small>{target.status} · 约每 5 小时自动更新</small></div></div><div className="target-actions"><a href={target.url} target="_blank" rel="noreferrer" aria-label={`打开${target.name}`}><ExternalLink size={15}/></a><button aria-label={`删除${target.name}`} onClick={() => onDeleteTarget(target)}><Trash2 size={15}/></button></div></article>)}</div>
         <p className="modal-note">新增链接会立即出现在左侧导航，并自动开始首次抓取。同一 showId 会自动合并为一个演出页面，不同 sessionId 显示为不同日期；首次抓取后自动补全演员、地点和日期。</p>
       </section>
     </div>
@@ -724,7 +724,7 @@ export default function App() {
             <MiniStat icon={Ticket} label="市场最低价" value={currency(snapshot.lowest, activeShow)} meta={snapshot.firstBatch ? '✓ MoreTickets 首个真实快照' : `${snapshot.change > 0 ? '↑' : '↓'} 较上次采集 ${Math.abs(snapshot.change).toFixed(1)}%`} tone={snapshot.change > 0 ? 'warning' : 'positive'}/>
             <MiniStat icon={Activity} label="页面在售 Listings" value={`${snapshot.count} 条`} meta={`覆盖 ${session.tiers.length} 个票面`} tone="violet"/>
             <MiniStat icon={TrendingDown} label={lowestFaceValue === null ? '票档类型' : '较最低票面溢价'} value={lowestFaceValue === null ? `${session.tiers.length} 档` : `${Math.round((snapshot.lowest / lowestFaceValue - 1) * 100)}%`} meta={lowestFaceValue === null ? '按原页面票档展示' : `最低票面 ${currency(lowestFaceValue, activeShow)}`} tone="blue"/>
-            <MiniStat icon={Clock3} label="最后采集" value={session.lastCollected || '等待首批数据'} meta={archived ? '已归档，趋势数据已保留' : '每 2 小时自动更新'} tone="neutral"/>
+            <MiniStat icon={Clock3} label="最后采集" value={session.lastCollected || '等待首批数据'} meta={archived ? '已归档，趋势数据已保留' : '每小时检查 · 满5小时采集'} tone="neutral"/>
           </section>
 
           <section className="chart-panel">
@@ -735,7 +735,7 @@ export default function App() {
                 <button className="select-btn">最低价 <ChevronDown size={15}/></button>
               </div>
             </div>
-            <div className="legend"><span><i className="legend-line"></i>市场最低价</span><span><i className="legend-bar"></i>在售 Listings</span><em>{session.history?.length > 1 ? `已保存 ${session.history.length} 次抓取` : snapshot.firstBatch ? '首个真实批次 · 等待形成趋势' : '数据每2小时自动采集'}</em></div>
+            <div className="legend"><span><i className="legend-line"></i>市场最低价</span><span><i className="legend-bar"></i>在售 Listings</span><em>{session.history?.length > 1 ? `已保存 ${session.history.length} 次抓取` : snapshot.firstBatch ? '首个真实批次 · 等待形成趋势' : '每小时检查 · 满5小时采集'}</em></div>
             <div className="main-chart">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={overview} margin={{ top: 14, right: 12, left: -8, bottom: 0 }}>

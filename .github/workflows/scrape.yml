@@ -1,4 +1,4 @@
-name: Ticket Radar - two-hour collection
+name: Ticket Radar - resilient five-hour collection
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
       - 'collector/**'
       - '.github/workflows/scrape.yml'
   schedule:
-    - cron: "17 */2 * * *"
+    - cron: "37 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -30,4 +30,5 @@ jobs:
       - name: Collect all monitored events
         env:
           RADAR_SITE_URL: https://ticket-price-radar.weichenliu44.workers.dev
-        run: python collector/scrape_moretickets.py --from-site --upload-site
+          RADAR_MIN_INTERVAL_HOURS: ${{ github.event_name == 'schedule' && '5' || '0' }}
+        run: python collector/scrape_moretickets.py --from-site --upload-site --min-interval-hours "$RADAR_MIN_INTERVAL_HOURS"

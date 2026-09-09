@@ -8,7 +8,7 @@ import asyncio
 import json
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -202,13 +202,41 @@ def site_endpoint(site_url: str, path: str) -> str:
     return f"{site_url.rstrip('/')}{path}"
 
 
-def load_site_targets(site_url: str) -> list[str]:
+def target_last_collected(target: dict) -> datetime | None:
+    value = str(target.get("lastCollected") or "").strip()
+    if not value:
+        return None
+    try:
+        china_time = datetime.strptime(value, "%Y-%m-%d %H:%M").replace(
+            tzinfo=timezone(timedelta(hours=8))
+        )
+        return china_time.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def load_site_targets(site_url: str, min_interval_hours: float = 0) -> list[str]:
     response = requests.get(site_endpoint(site_url, "/api/shared-state"), timeout=30)
     response.raise_for_status()
     state = response.json()
     if not state.get("initialized"):
         raise RuntimeError("票价雷达共享数据库尚未初始化，请先打开网站一次")
-    return [target["url"] for target in state.get("targets", []) if target.get("url")]
+
+    now = datetime.now(timezone.utc)
+    minimum_age = timedelta(hours=max(0, min_interval_hours))
+    urls = []
+    skipped = 0
+    for target in state.get("targets", []):
+        url = target.get("url")
+        if not url:
+            continue
+        last_collected = target_last_collected(target)
+        if last_collected and now - last_collected < minimum_age:
+            skipped += 1
+            continue
+        urls.append(url)
+    print(f"Due targets: {len(urls)}; skipped until 5-hour interval: {skipped}")
+    return urls
 
 
 def upload_to_site(site_url: str, snapshot: dict) -> None:
@@ -237,6 +265,12 @@ async def main() -> None:
     parser.add_argument("--from-site", action="store_true", help="Read all active monitoring URLs from the shared website")
     parser.add_argument("--upload-site", action="store_true", help="Upload each snapshot to the shared website database")
     parser.add_argument("--site-url", default=os.getenv("RADAR_SITE_URL", "https://ticket-price-radar.weichenliu44.workers.dev"))
+    parser.add_argument(
+        "--min-interval-hours",
+        type=float,
+        default=float(os.getenv("RADAR_MIN_INTERVAL_HOURS", "0")),
+        help="Only collect site targets whose last successful snapshot is at least this old",
+    )
     args = parser.parse_args()
 
     urls = [args.url] if args.url else []
@@ -244,10 +278,11 @@ async def main() -> None:
         targets = json.loads(args.targets.read_text(encoding="utf-8"))
         urls.extend(item["url"] for item in targets if item.get("enabled", True))
     if args.from_site:
-        urls.extend(load_site_targets(args.site_url))
+        urls.extend(load_site_targets(args.site_url, args.min_interval_hours))
     urls = list(dict.fromkeys(urls))
     if not urls:
-        parser.error("provide a URL or --targets file")
+        print("No monitoring targets are due; next hourly check will try again.")
+        return
 
     snapshots = []
     failures = []
