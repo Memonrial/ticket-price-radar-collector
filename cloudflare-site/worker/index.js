@@ -128,6 +128,13 @@ function isFinishedSession(session) {
   return !session?.pending && endTime !== null && endTime <= Date.now()
 }
 
+function collectedWithinHours(target, session, hours) {
+  const value = String(session?.lastCollected || target?.lastCollected || '').trim()
+  if (!value) return false
+  const timestamp = new Date(`${value.replace(' ', 'T')}:00+08:00`).getTime()
+  return Number.isFinite(timestamp) && Date.now() - timestamp < hours * 60 * 60 * 1000
+}
+
 function chinaTime(iso) {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return { full: iso, short: iso }
@@ -254,7 +261,7 @@ function mergeSnapshotIntoState(state, snapshot) {
   }
   groups[groupIndex] = group
   const targets = state.targets.map((item) => (String(item.id) === snapshot.sessionId
-    ? { ...item, status: '监测中', interval: 120, lastCollected: time.full }
+    ? { ...item, status: '监测中', interval: 300, lastCollected: time.full }
     : item))
   return { targets, showGroups: groups }
 }
@@ -453,6 +460,7 @@ async function collectEveryTarget(env) {
     const group = state.showGroups.find((item) => String(item.showId || item.groupKey || '') === String(target.showId || ''))
     const session = group?.sessions?.find((item) => String(item.id) === String(target.id))
     if (session && isFinishedSession(session)) continue
+    if (collectedWithinHours(target, session, 5)) continue
     try { await collectTarget(target, env) } catch (error) { console.error('scheduled ticket collection failed', target.id, error) }
   }
 }

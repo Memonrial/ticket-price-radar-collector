@@ -12,6 +12,9 @@
   "browser": {
     "binding": "BROWSER"
   },
+  "triggers": {
+    "crons": ["17 */2 * * *"]
+  },
   "d1_databases": [
     {
       "binding": "DB",
